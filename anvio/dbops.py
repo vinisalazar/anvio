@@ -91,9 +91,10 @@ class ContigsSuperclass(object):
         self.contigs_basic_info = {}
         self.contig_sequences = {}
 
-        self.genes_in_contigs_dict = {}
+        self.genes_in_contigs_dict = {} # this is the MAIN source of all gene calls in a contigs database
         self.gene_lengths = {}
         self.contig_name_to_genes = {}
+        self.gene_callers_available = {}
         self.genes_in_splits = {} # keys of this dict are NOT gene caller ids. they are ids for each entry.
         self.genes_in_splits_summary_dict = {}
         self.genes_in_splits_summary_headers = []
@@ -122,21 +123,26 @@ class ContigsSuperclass(object):
             return
 
         self.progress.new('Loading the contigs DB')
-        contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
+        self.contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
 
         self.progress.update('Setting contigs self data dict')
-        self.a_meta = contigs_db.meta
+        self.a_meta = self.contigs_db.meta
 
         self.a_meta['creation_date'] = utils.get_time_to_date(self.a_meta['creation_date']) if 'creation_date' in self.a_meta else 'unknown'
 
+        # setting up the gene caller for this class to populate gene callers dict
+        A = lambda x: args.__dict__[x] if x in args.__dict__ else None
+        self.gene_caller = A('gene_caller') if A('gene_caller') else constants.default_gene_caller
+        self.gene_callers_available = self.contigs_db.db.get_unique_counts_dict_for_column_in_table(t.genes_in_contigs_table_name, 'source')
+
+        self.progress.update('Initializing gene calls from the gene caller "%s"' % self.gene_caller)
+        self.genes_in_contigs_dict = self.init_genes_in_contigs_dict()
+
         self.progress.update('Reading contigs basic info')
-        self.contigs_basic_info = contigs_db.db.get_table_as_dict(t.contigs_info_table_name, string_the_key=True)
+        self.contigs_basic_info = self.contigs_db.db.get_table_as_dict(t.contigs_info_table_name, string_the_key=True)
 
         self.progress.update('Reading splits basic info')
-        self.splits_basic_info = contigs_db.db.get_table_as_dict(t.splits_info_table_name)
-
-        self.progress.update('Reading genes in contigs table')
-        self.genes_in_contigs_dict = contigs_db.db.get_table_as_dict(t.genes_in_contigs_table_name)
+        self.splits_basic_info = self.contigs_db.db.get_table_as_dict(t.splits_info_table_name)
 
         self.progress.update('Populating gene lengths dict')
         self.gene_lengths = dict([(g, (self.genes_in_contigs_dict[g]['stop'] - self.genes_in_contigs_dict[g]['start'])) for g in self.genes_in_contigs_dict])
@@ -149,14 +155,14 @@ class ContigsSuperclass(object):
             self.contig_name_to_genes[e['contig']].add((gene_unique_id, e['start'], e['stop']), )
 
         self.progress.update('Reading genes in splits table')
-        self.genes_in_splits = contigs_db.db.get_table_as_dict(t.genes_in_splits_table_name)
+        self.genes_in_splits = self.contigs_db.db.get_table_as_dict(t.genes_in_splits_table_name)
 
         self.progress.update('Reading genes in splits summary table')
-        self.genes_in_splits_summary_dict = contigs_db.db.get_table_as_dict(t.genes_in_splits_summary_table_name)
-        self.genes_in_splits_summary_headers = contigs_db.db.get_table_structure(t.genes_in_splits_summary_table_name)
+        self.genes_in_splits_summary_dict = self.contigs_db.db.get_table_as_dict(t.genes_in_splits_summary_table_name)
+        self.genes_in_splits_summary_headers = self.contigs_db.db.get_table_structure(t.genes_in_splits_summary_table_name)
 
         self.progress.update('Identifying HMM searches for single-copy genes and others')
-        self.hmm_sources_info = contigs_db.db.get_table_as_dict(t.hmm_hits_info_table_name)
+        self.hmm_sources_info = self.contigs_db.db.get_table_as_dict(t.hmm_hits_info_table_name)
         for hmm_source in self.hmm_sources_info:
             self.hmm_sources_info[hmm_source]['genes'] = sorted([g.strip() for g in self.hmm_sources_info[hmm_source]['genes'].split(',')])
 
@@ -179,7 +185,7 @@ class ContigsSuperclass(object):
         for entry in list(self.genes_in_splits.values()):
             self.gene_callers_id_to_split_name_dict[entry['gene_callers_id']] = entry['split']
 
-        contigs_db.disconnect()
+        self.contigs_db.disconnect()
 
         self.progress.update('Accessing the auxiliary data file')
         auxiliary_contigs_data_path = get_auxiliary_data_path_for_contigs_db(self.contigs_db_path)
@@ -197,6 +203,19 @@ class ContigsSuperclass(object):
             self.run.info('Auxiliary Data', 'Found: %s (v. %s)' % (auxiliary_contigs_data_path, anvio.__hdf5__version__))
 
         self.run.info('Contigs DB', 'Initialized: %s (v. %s)' % (self.contigs_db_path, anvio.__contigs__version__))
+
+
+    def init_genes_in_contigs_dict(self):
+        if not len(self.gene_callers_available):
+            return
+
+        if self.gene_caller not in self.gene_callers_available:
+            raise ConfigError("The gene caller '%s' is not one of the available gene callers in this database :/\
+                               Here are the ones this contigs database knows about: %s." % \
+                                                        (self.gene_caller, ', '.join(self.gene_callers_available)))
+
+        self.genes_in_contigs_dict = self.contigs_db.db.get_some_rows_from_table_as_dict(t.genes_in_contigs_table_name,
+                                                                                         'source = "{source}"'.format(source=self.gene_caller))
 
 
     def init_splits_taxonomy(self, t_level = 't_genus'):
