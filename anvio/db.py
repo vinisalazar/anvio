@@ -132,6 +132,36 @@ class DB:
         return val
 
 
+    def is_table_name_in_db(self, table_name, dont_raise=False):
+        if table_name in self.get_table_names():
+            return True
+        else:
+            if dont_raise:
+                return False
+            else:
+                raise ConfigError("The table '%s' does not seem to be in '%s' :/" % (table_name, self.db_path))
+
+
+    def is_column_name_in_table(self, table_name, column_name, dont_raise=False):
+        self.is_table_name_in_db(table_name, dont_raise=dont_raise)
+
+        if column_name in self.get_table_column_names(table_name):
+            return True
+        else:
+            if dont_raise:
+                return False
+            else:
+                raise ConfigError("The column name '%s' does not seem to be in the table '%s' of '%s' :/" \
+                                                % (column_name, table_name, self.db_path))
+
+
+    def get_unique_counts_dict_for_column_in_table(self, table_name, column_name):
+        self.is_column_name_in_table(table_name, column_name)
+
+        response = self._exec('''select {c}, count({c}) from {t} group by {c};'''.format(t=table_name, c=column_name))
+        return dict(response.fetchall())
+
+
     def get_meta_value(self, key):
         response = self._exec("""SELECT value FROM self WHERE key='%s'""" % key)
         rows = response.fetchall()
@@ -193,6 +223,11 @@ class DB:
     def get_table_column_types(self, table):
         response = self._exec('PRAGMA TABLE_INFO(%s)' % table)
         return [t[2] for t in response.fetchall()]
+
+
+    def get_table_column_names(self, table):
+        response = self._exec('PRAGMA TABLE_INFO(%s)' % table)
+        return [t[1] for t in response.fetchall()]
 
 
     def get_table_structure(self, table):
