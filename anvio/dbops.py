@@ -78,12 +78,66 @@ class DBClassFactory:
         return anvio_db_class(db_path)
 
 
-class ContigsSuperclass(object):
+class GeneCallsSuper(object):
+    """Superclass that makes available gene calls minding sources"""
+    def __init__(self, args, run=run, progress=progress):
+        self.run = run
+        self.progress = progress
+
+        A = lambda x: args.__dict__[x] if x in args.__dict__ else None
+
+        # is contigs db there? is it happy and sound?
+        self.contigs_db_path = A('contigs_db')
+
+        if not self.contigs_db_path:
+            raise ConfigError("GeneCalls is being initiated without a db path. Anvi'o needs an adult :(")
+
+        is_contigs_db(self.contigs_db_path)
+
+        # do we have gene caller? should we use the default?
+        self.gene_caller = A('gene_caller') if A('gene_caller') else constants.default_gene_caller
+
+        # open the database:
+        self.contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
+
+        # what gene callers do we have in there?
+        self.gene_callers_available = self.contigs_db.db.get_unique_counts_dict_for_column_in_table(t.genes_in_contigs_table_name, 'source')
+
+        # setting up the gene caller for this class to populate gene callers dict
+        self.progress.new('GeneCallsSuper')
+        self.progress.update('Initializing gene calls from the gene caller "%s"' % self.gene_caller)
+        self.init_genes_in_contigs_dict() # this will populate the self.genes_in_contigs_dict.
+        self.progress.end()
+
+        # we are done here.
+        self.contigs_db.disconnect()
+
+
+    def init_genes_in_contigs_dict(self):
+        if not len(self.gene_callers_available):
+            return
+
+        if self.gene_caller not in self.gene_callers_available:
+            raise ConfigError("The gene caller '%s' is not one of the available gene callers in this database :/\
+                               Here are the ones this contigs database knows about: %s." % \
+                                                        (self.gene_caller, ', '.join(self.gene_callers_available)))
+
+        self.genes_in_contigs_dict = self.contigs_db.db.get_some_rows_from_table_as_dict(t.genes_in_contigs_table_name,
+                                                                                         'source = "{source}"'.format(source=self.gene_caller))
+
+
+class ContigsSuperclass(GeneCallsSuper):
     def __init__(self, args, r=run, p=progress):
+        self.args = args
         self.run = r
         self.progress = p
 
         self.a_meta = {}
+
+        # the following are going to be filled by GeneCallsSuper
+        self.gene_callers_available = {}
+        self.gene_caller = {}
+        self.genes_in_contigs_dict = {} # this should be the MAIN source of all gene calls in a contigs database
 
         self.splits_basic_info = {}
         self.splits_taxonomy_dict = {}
@@ -91,10 +145,8 @@ class ContigsSuperclass(object):
         self.contigs_basic_info = {}
         self.contig_sequences = {}
 
-        self.genes_in_contigs_dict = {} # this is the MAIN source of all gene calls in a contigs database
         self.gene_lengths = {}
         self.contig_name_to_genes = {}
-        self.gene_callers_available = {}
         self.genes_in_splits = {} # keys of this dict are NOT gene caller ids. they are ids for each entry.
         self.genes_in_splits_summary_dict = {}
         self.genes_in_splits_summary_headers = []
@@ -122,6 +174,8 @@ class ContigsSuperclass(object):
         except:
             return
 
+        GeneCallsSuper.__init__(self, self.args, self.run, self.progress)
+
         self.progress.new('Loading the contigs DB')
         self.contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
 
@@ -129,14 +183,6 @@ class ContigsSuperclass(object):
         self.a_meta = self.contigs_db.meta
 
         self.a_meta['creation_date'] = utils.get_time_to_date(self.a_meta['creation_date']) if 'creation_date' in self.a_meta else 'unknown'
-
-        # setting up the gene caller for this class to populate gene callers dict
-        A = lambda x: args.__dict__[x] if x in args.__dict__ else None
-        self.gene_caller = A('gene_caller') if A('gene_caller') else constants.default_gene_caller
-        self.gene_callers_available = self.contigs_db.db.get_unique_counts_dict_for_column_in_table(t.genes_in_contigs_table_name, 'source')
-
-        self.progress.update('Initializing gene calls from the gene caller "%s"' % self.gene_caller)
-        self.init_genes_in_contigs_dict() # this will populate the self.genes_in_contigs_dict.
 
         self.progress.update('Reading contigs basic info')
         self.contigs_basic_info = self.contigs_db.db.get_table_as_dict(t.contigs_info_table_name, string_the_key=True)
@@ -203,19 +249,6 @@ class ContigsSuperclass(object):
             self.run.info('Auxiliary Data', 'Found: %s (v. %s)' % (auxiliary_contigs_data_path, anvio.__hdf5__version__))
 
         self.run.info('Contigs DB', 'Initialized: %s (v. %s)' % (self.contigs_db_path, anvio.__contigs__version__))
-
-
-    def init_genes_in_contigs_dict(self):
-        if not len(self.gene_callers_available):
-            return
-
-        if self.gene_caller not in self.gene_callers_available:
-            raise ConfigError("The gene caller '%s' is not one of the available gene callers in this database :/\
-                               Here are the ones this contigs database knows about: %s." % \
-                                                        (self.gene_caller, ', '.join(self.gene_callers_available)))
-
-        self.genes_in_contigs_dict = self.contigs_db.db.get_some_rows_from_table_as_dict(t.genes_in_contigs_table_name,
-                                                                                         'source = "{source}"'.format(source=self.gene_caller))
 
 
     def init_splits_taxonomy(self, t_level = 't_genus'):
