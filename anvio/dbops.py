@@ -136,7 +136,7 @@ class ContigsSuperclass(object):
         self.gene_callers_available = self.contigs_db.db.get_unique_counts_dict_for_column_in_table(t.genes_in_contigs_table_name, 'source')
 
         self.progress.update('Initializing gene calls from the gene caller "%s"' % self.gene_caller)
-        self.genes_in_contigs_dict = self.init_genes_in_contigs_dict()
+        self.init_genes_in_contigs_dict() # this will populate the self.genes_in_contigs_dict.
 
         self.progress.update('Reading contigs basic info')
         self.contigs_basic_info = self.contigs_db.db.get_table_as_dict(t.contigs_info_table_name, string_the_key=True)
