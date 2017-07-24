@@ -3381,7 +3381,7 @@ class TablesForTaxonomy(Table):
         self.source = source
 
         if not self.genes_are_called:
-            raise ConfigError("Something is wrong. The contigs database says that genes were now called, and here\
+            raise ConfigError("Something is wrong. The contigs database says that genes were not called, and here\
                                 you are trying to populate taxonomy tables for genes. No, thanks.")
 
         self.init_gene_calls_dict()
