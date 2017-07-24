@@ -166,18 +166,3 @@ class Table(object):
         database._exec('''DELETE FROM %s''' % (table_name))
 
         database.disconnect()
-
-
-    def init_gene_calls_dict(self):
-        if self.db_type != 'contigs':
-            return None
-
-        self.progress.new('Initializing the dictionary for gene calls')
-        self.progress.update('...')
-
-        database = db.DB(self.db_path, self.version)
-        self.gene_calls_dict = database.get_table_as_dict(t.genes_in_contigs_table_name)
-        database.disconnect()
-
-        self.progress.end()
-
