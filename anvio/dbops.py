@@ -79,55 +79,59 @@ class DBClassFactory:
         return anvio_db_class(db_path)
 
 
-class GeneCallsSuper(object):
+class GeneCallsBaseClass(object):
     """Superclass that makes available gene calls minding sources"""
     def __init__(self, args, run=run, progress=progress):
         self.run = run
         self.progress = progress
 
-        A = lambda x: args.__dict__[x] if x in args.__dict__ else None
+        # these are the variables that are going to be initialized in this class:
+        self.genes_are_called = None
+        self.gene_callers_available = None
+        self.genes_in_contigs_dict = None
 
-        # is contigs db there? is it happy and sound?
+        A = lambda x: args.__dict__[x] if x in args.__dict__ else None
         self.contigs_db_path = A('contigs_db')
+        self.gene_caller = A('gene_caller') if A('gene_caller') else constants.default_gene_caller
 
         if not self.contigs_db_path:
             raise ConfigError("GeneCalls is being initiated without a db path. Anvi'o needs an adult :(")
 
         is_contigs_db(self.contigs_db_path)
 
-        # do we have gene caller? should we use the default?
-        self.gene_caller = A('gene_caller') if A('gene_caller') else constants.default_gene_caller
 
         # open the database:
         self.contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
 
+        # were genes called?
+        self.genes_are_called = self.contigs_db.meta['genes_are_called']
+
         # what gene callers do we have in there?
         self.gene_callers_available = self.contigs_db.db.get_unique_counts_dict_for_column_in_table(t.genes_in_contigs_table_name, 'source')
 
-        # setting up the gene caller for this class to populate gene callers dict
-        self.progress.new('GeneCallsSuper')
-        self.progress.update('Initializing gene calls from the gene caller "%s"' % self.gene_caller)
-        self.init_genes_in_contigs_dict() # this will populate the self.genes_in_contigs_dict.
-        self.progress.end()
-
-        # we are done here.
-        self.contigs_db.disconnect()
-
-
-    def init_genes_in_contigs_dict(self):
         if not len(self.gene_callers_available):
             return
 
         if self.gene_caller not in self.gene_callers_available:
-            raise ConfigError("The gene caller '%s' is not one of the available gene callers in this database :/\
-                               Here are the ones this contigs database knows about: %s." % \
-                                                        (self.gene_caller, ', '.join(self.gene_callers_available)))
+            self.progress.end()
+            self.contigs_db.disconnect()
+            raise ConfigError("A GeneCallsBaseClass instance is created with a requested gene caller '%s', but it is not\
+                               is not one of the available gene callers in this database :/ Here are the ones the contigs\
+                               database at '%s' knows about: %s." % \
+                                                        (self.contigs_db_path, self.gene_caller, ', '.join(self.gene_callers_available)))
+
+        # setting up the gene caller for this class to populate gene callers dict
+        self.progress.new('GeneCallsBaseClass')
+        self.progress.update('Initializing gene calls for the gene caller "%s"' % self.gene_caller)
 
         self.genes_in_contigs_dict = self.contigs_db.db.get_some_rows_from_table_as_dict(t.genes_in_contigs_table_name,
                                                                                          'source = "{source}"'.format(source=self.gene_caller))
 
+        self.progress.end()
+        self.contigs_db.disconnect()
 
-class ContigsSuperclass(GeneCallsSuper):
+
+class ContigsSuperclass(GeneCallsBaseClass):
     def __init__(self, args, r=run, p=progress):
         self.args = args
         self.run = r
@@ -135,7 +139,7 @@ class ContigsSuperclass(GeneCallsSuper):
 
         self.a_meta = {}
 
-        # the following are going to be filled by GeneCallsSuper
+        # the following are going to be filled by GeneCallsBaseClass
         self.gene_callers_available = {}
         self.gene_caller = {}
         self.genes_in_contigs_dict = {} # this should be the MAIN source of all gene calls in a contigs database
@@ -186,7 +190,7 @@ class ContigsSuperclass(GeneCallsSuper):
 
         filesnpaths.is_file_exists(self.contigs_db_path)
 
-        GeneCallsSuper.__init__(self, self.args, self.run, self.progress)
+        GeneCallsBaseClass.__init__(self, self.args, self.run, self.progress)
 
         self.progress.new('Loading the contigs DB')
         self.contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
@@ -246,12 +250,12 @@ class ContigsSuperclass(GeneCallsSuper):
         self.progress.update('Accessing the auxiliary data file')
 
         self.nt_positions_info = {}
-        for contig_name, nt_position_row in contigs_db.db.get_table_as_dict(t.nt_position_info_table_name).items():
+        for contig_name, nt_position_row in self.contigs_db.db.get_table_as_dict(t.nt_position_info_table_name).items():
             self.nt_positions_info[contig_name] = utils.convert_binary_blob_to_numpy_array(nt_position_row['position_info'], 'uint8')
 
         self.progress.end()
 
-        contigs_db.disconnect()
+        self.contigs_db.disconnect()
 
         self.run.info('Contigs DB', 'Initialized: %s (v. %s)' % (self.contigs_db_path, anvio.__contigs__version__))
 
@@ -3591,7 +3595,7 @@ class TableForAAFrequencies(Table):
         profile_db.disconnect()
 
 
-class TablesForGeneCalls(Table):
+class TablesForGeneCalls(Table, GeneCallsBaseClass):
     def __init__(self, db_path, contigs_fasta=None, run=run, progress=progress, debug=False):
         self.run = run
         self.progress = progress
@@ -3851,14 +3855,14 @@ class TablesForGeneCalls(Table):
 
 
     def populate_genes_in_splits_tables(self):
-        Table.__init__(self, self.db_path, anvio.__contigs__version__, run, progress)
-        self.init_gene_calls_dict()
+        Table.__init__(self, self.db_path, anvio.__contigs__version__, run=self.run, progress=self.progress)
+        GeneCallsBaseClass.__init__(self, argparse.Namespace(contigs_db=self.db_path), run=self.run, progress=self.progress)
 
         genes_in_splits = GenesInSplits()
         # build a dictionary for fast access to all genes identified within a contig
         gene_calls_in_contigs_dict = {}
-        for gene_callers_id in self.gene_calls_dict:
-            contig = self.gene_calls_dict[gene_callers_id]['contig']
+        for gene_callers_id in self.genes_in_contigs_dict:
+            contig = self.genes_in_contigs_dict[gene_callers_id]['contig']
             if contig in gene_calls_in_contigs_dict:
                 gene_calls_in_contigs_dict[contig].add(gene_callers_id)
             else:
@@ -3883,9 +3887,9 @@ class TablesForGeneCalls(Table):
                 # this particular split to generate summarized info for each split. BUT one important that is done
                 # in the following loop is genes_in_splits.add call, which populates GenesInSplits class.
                 for gene_callers_id in gene_calls_in_contigs_dict[contig]:
-                    if self.gene_calls_dict[gene_callers_id]['stop'] > start and self.gene_calls_dict[gene_callers_id]['start'] < stop:
-                        gene_start_stops.append((self.gene_calls_dict[gene_callers_id]['start'], self.gene_calls_dict[gene_callers_id]['stop']), )
-                        genes_in_splits.add(split_name, start, stop, gene_callers_id, self.gene_calls_dict[gene_callers_id]['start'], self.gene_calls_dict[gene_callers_id]['stop'])
+                    if self.genes_in_contigs_dict[gene_callers_id]['stop'] > start and self.genes_in_contigs_dict[gene_callers_id]['start'] < stop:
+                        gene_start_stops.append((self.genes_in_contigs_dict[gene_callers_id]['start'], self.genes_in_contigs_dict[gene_callers_id]['stop']), )
+                        genes_in_splits.add(split_name, start, stop, gene_callers_id, self.genes_in_contigs_dict[gene_callers_id]['start'], self.genes_in_contigs_dict[gene_callers_id]['stop'])
 
                 # here we identify genes that are associated with a split even if one base of the gene spills into
                 # the defined start or stop of a split, which means, split N, will include genes A, B and C in this
@@ -3921,7 +3925,7 @@ class TablesForGeneCalls(Table):
         contigs_db.disconnect()
 
 
-class TablesForHMMHits(Table):
+class TablesForHMMHits(Table, GeneCallsBaseClass):
     def __init__(self, db_path, num_threads_to_use=1, run=run, progress=progress):
         self.num_threads_to_use = num_threads_to_use
         self.db_path = db_path
@@ -3929,16 +3933,15 @@ class TablesForHMMHits(Table):
         self.debug = False
 
         Table.__init__(self, self.db_path, anvio.__contigs__version__, run, progress)
+        GeneCallsBaseClass.__init__(self, argparse.Namespace(contigs_db=self.db_path), run=self.run, progress=self.progress)
 
         if not self.genes_are_called:
             raise ConfigError("It seems the contigs database '%s' was created with '--skip-gene-calling' flag.\
                                 Nothing to do here :/" % (self.db_path))
 
-        self.init_gene_calls_dict()
-
-        if not len(self.gene_calls_dict):
-            raise ConfigError("Tables that should contain gene calls are empty. Which probably means the gene\
-                                caller reported no genes for your contigs.")
+        if not len(self.genes_in_contigs_dict):
+            raise ConfigError("The variable that should contain gene calls are empty. Which probably means the gene\
+                               caller reported no genes for your contigs. Something may be fishy here.")
 
         self.set_next_available_id(t.hmm_hits_table_name)
         self.set_next_available_id(t.hmm_hits_splits_table_name)
@@ -4119,7 +4122,7 @@ class TablesForHMMHits(Table):
         for entry_id in search_results_dict:
             hit = search_results_dict[entry_id]
 
-            gene_call = self.gene_calls_dict[hit['gene_callers_id']]
+            gene_call = self.genes_in_contigs_dict[hit['gene_callers_id']]
 
             hit['gene_unique_identifier'] = hashlib.sha224('_'.join([gene_call['contig'], hit['gene_name'], str(gene_call['start']), str(gene_call['stop'])]).encode('utf-8')).hexdigest()
             hit['source'] = source
@@ -4158,7 +4161,7 @@ class TablesForHMMHits(Table):
     def process_splits(self, search_results_dict):
         hits_per_contig = {}
         for hit in list(search_results_dict.values()):
-            contig_name = self.gene_calls_dict[hit['gene_callers_id']]['contig']
+            contig_name = self.genes_in_contigs_dict[hit['gene_callers_id']]['contig']
 
             if contig_name in hits_per_contig:
                 hits_per_contig[contig_name].append(hit)
@@ -4178,8 +4181,8 @@ class TablesForHMMHits(Table):
 
                 # FIXME: this really needs some explanation.
                 for hit in hits_per_contig[contig]:
-                    hit_start = self.gene_calls_dict[hit['gene_callers_id']]['start']
-                    hit_stop = self.gene_calls_dict[hit['gene_callers_id']]['stop']
+                    hit_start = self.genes_in_contigs_dict[hit['gene_callers_id']]['start']
+                    hit_stop = self.genes_in_contigs_dict[hit['gene_callers_id']]['stop']
 
                     if hit_stop > split_start and hit_start < split_stop:
                         gene_length = hit_stop - hit_start
