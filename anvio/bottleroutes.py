@@ -11,12 +11,12 @@ import os
 import re
 import io
 import sys
+import time
 import json
 import random
 import argparse
 import requests
 import datetime
-import webbrowser
 from multiprocessing import Process
 
 from bottle import Bottle
@@ -30,14 +30,14 @@ import anvio.drivers as drivers
 import anvio.terminal as terminal
 import anvio.summarizer as summarizer
 import anvio.filesnpaths as filesnpaths
+import anvio.auxiliarydataops as auxiliarydataops
 
 from anvio.serverAPI import AnviServerAPI
-from anvio.dbops import SamplesInformationDatabase
 from anvio.errors import RefineError, ConfigError
 
 
-__author__ = "Ozcan Esen"
-__copyright__ = "Copyright 2016, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = ["A. Murat Eren"]
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -54,10 +54,14 @@ BaseRequest.MEMFILE_MAX = 1024 * 1024 * 100
 
 class BottleApplication(Bottle):
     def __init__(self, interactive, args, mock_request=None, mock_response=None):
+        A = lambda x: args.__dict__[x] if x in args.__dict__ else None
         super(BottleApplication, self).__init__()
         self.interactive = interactive
         self.args = args
-        self.read_only = args.read_only
+        self.read_only = A('read_only')
+        self.browser_path = A('browser_path')
+        self.export_svg = A('export_svg')
+        self.server_only = A('server_only')
 
         self.unique_session_id = random.randint(0,9999999999)
         self.static_dir = os.path.join(os.path.dirname(utils.__file__), 'data/interactive')
@@ -92,7 +96,7 @@ class BottleApplication(Bottle):
         self.route('/data/news',                               callback=self.get_news)
         self.route('/data/<name>',                             callback=self.send_data)
         self.route('/data/view/<view_id>',                     callback=self.get_view_data)
-        self.route('/tree/<items_ordering_id>',                callback=self.get_items_ordering)
+        self.route('/tree/<items_order_id>',                   callback=self.get_items_order)
         self.route('/state/autoload',                          callback=self.state_autoload)
         self.route('/state/all',                               callback=self.state_all)
         self.route('/state/get/<state_name>',                  callback=self.get_state)
@@ -109,12 +113,15 @@ class BottleApplication(Bottle):
         self.route('/summary/<collection_name>/:filename#.*#', callback=self.send_summary_static)
         self.route('/data/gene/<gene_callers_id>',             callback=self.get_sequence_for_gene_call)
         self.route('/data/hmm/<bin_name>/<gene_name>',         callback=self.get_hmm_hit_from_bin)
-        self.route('/data/proteinclusterssummary',             callback=self.get_protein_clusters_summary, method='POST')
-        self.route('/data/get_AA_sequences_for_PC/<pc_name>',  callback=self.get_AA_sequences_for_PC)
-        self.route('/data/proteinclusters/<pc_name>',          callback=self.inspect_pc)
+        self.route('/data/geneclusterssummary',             callback=self.get_gene_clusters_summary, method='POST')
+        self.route('/data/get_AA_sequences_for_gene_cluster/<gene_cluster_name>',  callback=self.get_AA_sequences_for_gene_cluster)
+        self.route('/data/geneclusters/<gene_cluster_name>',          callback=self.inspect_gene_cluster)
         self.route('/data/store_refined_bins',                 callback=self.store_refined_bins, method='POST')
+        self.route('/data/phylogeny/aligners',                 callback=self.get_available_aligners)
         self.route('/data/phylogeny/programs',                 callback=self.get_available_phylogeny_programs)
         self.route('/data/phylogeny/generate_tree',            callback=self.generate_tree, method='POST')
+        self.route('/data/search_functions',                   callback=self.search_functions_in_splits, method='POST')
+        self.route('/data/get_contigs_stats',                  callback=self.get_contigs_stats)
 
 
     def run_application(self, ip, port):
@@ -122,17 +129,27 @@ class BottleApplication(Bottle):
             server_process = Process(target=self.run, kwargs={'host': ip, 'port': port, 'quiet': True, 'server': 'cherrypy'})
             server_process.start()
 
-            if self.args.export_svg:
+            if self.export_svg:
                 try:
-                    utils.run_selenium_and_export_svg("http://%s:%d/app/index.html" % (ip, port), self.args.export_svg, run)
+                    utils.run_selenium_and_export_svg("http://%s:%d/app/index.html" % (ip, port),
+                                                      self.args.export_svg,
+                                                      browser_path=self.browser_path,
+                                                      run=run)
                 except Exception as e:
                     print(e)
                 finally:
                     server_process.terminate()
                     sys.exit(0)
 
-            if not self.args.server_only:
-                webbrowser.open_new("http://%s:%d" % (ip, port))
+            if not self.server_only:
+                # Sometimes browser opens before web server actually starts so we see
+                # message like "Website can not be reached" and user needs to refresh
+                # I have added sleep below to delay web browser little bit.
+                time.sleep(1.5)
+
+                utils.open_url_in_browser(url="http://%s:%d" % (ip, port),
+                                          browser_path=self.browser_path,
+                                          run=run)
 
             run.info_single('The server is now listening the port number "%d". When you are finished, press CTRL+C to terminate the server.' % port, 'green', nl_before = 1, nl_after=1)
             server_process.join()
@@ -143,7 +160,11 @@ class BottleApplication(Bottle):
 
 
     def redirect_to_app(self):
-        redirect('/app/index.html?rand=' + self.random_hash(8))
+        homepage = 'index.html' 
+        if self.interactive.mode == 'contigs':
+            homepage = 'contigs.html'
+
+        redirect('/app/%s?rand=%s' % (homepage, self.random_hash(8)))
 
 
     def send_static(self, filename):
@@ -171,6 +192,7 @@ class BottleApplication(Bottle):
                 index = pos
 
             # write rest of the file
+            ret.body.seek(index)
             buff.write(ret.body.read())
             ret.body = buff
             ret.body.seek(0)
@@ -226,9 +248,9 @@ class BottleApplication(Bottle):
             if self.interactive.mode == 'refine':
                 bin_prefix = list(self.interactive.bins)[0] + "_" if len(self.interactive.bins) == 1 else "Refined_",
 
-            return json.dumps( { "title":                               self.interactive.title,
+            return json.dumps( { "title":                              self.interactive.title,
                                  "description":                        (self.interactive.p_meta['description']),
-                                 "clusterings":                        (self.interactive.p_meta['default_clustering'], self.interactive.p_meta['clusterings']),
+                                 "item_orders":                        (self.interactive.p_meta['default_item_order'], self.interactive.p_meta['item_orders']),
                                  "views":                              (self.interactive.default_view, dict(list(zip(list(self.interactive.views.keys()), list(self.interactive.views.keys()))))),
                                  "contigLengths":                      dict([tuple((c, self.interactive.splits_basic_info[c]['length']),) for c in self.interactive.splits_basic_info]),
                                  "defaultView":                        self.interactive.views[self.interactive.default_view],
@@ -237,14 +259,15 @@ class BottleApplication(Bottle):
                                  "readOnly":                           self.read_only,
                                  "binPrefix":                          bin_prefix,
                                  "sessionId":                          self.unique_session_id,
-                                 "samplesOrder":                       self.interactive.samples_order_dict,
-                                 "sampleInformation":                  self.interactive.samples_information_dict,
-                                 "sampleInformationDefaultLayerOrder": self.interactive.samples_information_default_layer_order,
+                                 "samplesOrder":                       self.interactive.layers_order_data_dict,
+                                 "sampleInformation":                  self.interactive.layers_additional_data_dict,
+                                 "sampleInformationDefaultLayerOrder": self.interactive.layers_additional_data_keys,
                                  "stateAutoload":                      self.interactive.state_autoload,
                                  "collectionAutoload":                 self.interactive.collection_autoload,
                                  "noPing":                             False,
                                  "inspectionAvailable":                self.interactive.auxiliary_profile_data_available,
-                                 "sequencesAvailable":                 True if self.interactive.split_sequences else False})
+                                 "sequencesAvailable":                 True if self.interactive.split_sequences else False,
+                                 "functions_initialized":              self.interactive.gene_function_calls_initiated })
 
         elif name == "session_id":
             return json.dumps(self.unique_session_id)
@@ -254,20 +277,20 @@ class BottleApplication(Bottle):
         return json.dumps(self.interactive.views[view_id])
 
 
-    def get_items_ordering(self, items_ordering_id):
-        if items_ordering_id in self.interactive.p_meta['clusterings']:
-            items_ordering = self.interactive.p_meta['clusterings'][items_ordering_id]
+    def get_items_order(self, items_order_id):
+        if items_order_id in self.interactive.p_meta['item_orders']:
+            items_order = self.interactive.p_meta['item_orders'][items_order_id]
 
-            if 'newick' in items_ordering:
-                run.info_single("The newick order '%s' has been requested" % (items_ordering_id))
-                return json.dumps(items_ordering['newick'])
-            elif 'basic' in items_ordering:
-                run.info_single("The list order '%s' has been requested" % (items_ordering_id))
-                return json.dumps(items_ordering['basic'])
+            if items_order['type'] == 'newick':
+                run.info_single("The newick order '%s' has been requested" % (items_order_id))
+            elif items_order['type'] == 'basic':
+                run.info_single("The basic order '%s' has been requested" % (items_order_id))
             else:
-                return json.dumps({'error': "The interface requested something anvi'o doesn't know about. Item orderings\
+                return json.dumps({'error': "The interface requested something anvi'o doesn't know about. Item orders\
                                              can only be in the form of 'newick' or 'basic'. But the interface requested\
-                                             a '%s'. We are all confused here :/" % items_ordering_id})
+                                             a '%s'. We are all confused here :/" % items_order_id})
+
+            return json.dumps(items_order['data'])
 
         return json.dumps("")
 
@@ -322,8 +345,12 @@ class BottleApplication(Bottle):
 
         layers = sorted(self.interactive.p_meta['samples'])
 
-        coverage_values_dict = self.interactive.split_coverage_values.get(split_name)
-        data['coverage'] = [coverage_values_dict[layer].tolist() for layer in layers]
+        auxiliary_coverages_db = auxiliarydataops.AuxiliaryDataForSplitCoverages(self.interactive.auxiliary_data_path,
+                                                                                 self.interactive.p_meta['contigs_db_hash'])
+        coverages = auxiliary_coverages_db.get(split_name)
+        auxiliary_coverages_db.close()
+
+        data['coverage'] = [coverages[layer].tolist() for layer in layers]
 
         ## get the variability information dict for split:
         progress.new('Variability')
@@ -611,75 +638,85 @@ class BottleApplication(Bottle):
         return json.dumps({'sequence': sequence, 'header': header})
 
 
-    def get_protein_clusters_summary(self):
-        protein_cluster_ids = json.loads(request.forms.get('split_names'))
+    def get_gene_clusters_summary(self):
+        gene_cluster_ids = json.loads(request.forms.get('split_names'))
         bin_name = json.loads(request.forms.get('bin_name'))
 
-        summary = self.interactive.get_summary_for_PCs_list(protein_cluster_ids)
+        summary = self.interactive.get_summary_for_gene_clusters_list(gene_cluster_ids)
 
-        run.info_single('PC info has been requested for %d items in %s' % (len(protein_cluster_ids), bin_name))
+        run.info_single('Gene cluster info has been requested for %d items in %s' % (len(gene_cluster_ids), bin_name))
 
         return json.dumps({'functions': summary['functions'],
-                           'num_PCs': summary['num_PCs'],
+                           'num_gene_clusters': summary['num_gene_clusters'],
                            'genomes_contributing': summary['genomes_contributing'],
                            'num_gene_calls': summary['num_gene_calls']})
 
 
-    def get_AA_sequences_for_PC(self, pc_name):
+    def get_AA_sequences_for_gene_cluster(self, gene_cluster_name):
         data = {}
 
-        if pc_name not in self.interactive.protein_clusters:
+        if gene_cluster_name not in self.interactive.gene_clusters:
             return data
 
         if not self.interactive.genomes_storage_is_available:
             return data
 
-        # add the list of gene caller ids associated with this protein cluster into `data`:
-        for genome_name in self.interactive.protein_clusters[pc_name]:
-            for gene_callers_id in self.interactive.protein_clusters[pc_name][genome_name]:
+        # add the list of gene caller ids associated with this pootein cluster into `data`:
+        for genome_name in self.interactive.gene_clusters[gene_cluster_name]:
+            for gene_callers_id in self.interactive.gene_clusters[gene_cluster_name][genome_name]:
                 data['%s_%s' % (genome_name, str(gene_callers_id))] = self.interactive.genomes_storage.get_gene_sequence(genome_name, gene_callers_id)
 
         return json.dumps(data)
 
 
-    def inspect_pc(self, pc_name):
-        data = {'pc_name': pc_name,
+    def inspect_gene_cluster(self, gene_cluster_name):
+        data = {'gene_cluster_name': gene_cluster_name,
                 'genomes': [],
                 'index': None,
                 'gene_caller_ids': [],
                 'gene_caller_ids_in_genomes': {},
-                'aa_sequences_in_pc': {},
-                'previous_pc_name': None,
-                'next_pc_name': None,
+                'aa_sequences_in_gene_cluster': {},
+                'previous_gene_cluster_name': None,
+                'next_gene_cluster_name': None,
                 'index': None,
                 'total': None
                 }
 
-        if pc_name not in self.interactive.protein_clusters:
+        if gene_cluster_name not in self.interactive.gene_clusters:
             return data
 
         if not self.interactive.genomes_storage_is_available:
             return data
 
-        AA_sequences = self.interactive.get_AA_sequences_for_PCs(pc_names=set([pc_name]))
+        AA_sequences = self.interactive.get_sequences_for_gene_clusters(gene_cluster_names=set([gene_cluster_name]))
 
-        # add the list of gene caller ids associated with this protein cluster into `data`:
-        for genome_name in self.interactive.protein_clusters[pc_name]:
-            data['aa_sequences_in_pc'][genome_name] = {}
-            for gene_callers_id in self.interactive.protein_clusters[pc_name][genome_name]:
+        # add the list of gene caller ids associated with this gene cluster into `data`:
+        for genome_name in self.interactive.gene_clusters[gene_cluster_name]:
+            data['aa_sequences_in_gene_cluster'][genome_name] = {}
+            for gene_callers_id in self.interactive.gene_clusters[gene_cluster_name][genome_name]:
                 data['gene_caller_ids'].append((gene_callers_id, genome_name), )
-                data['aa_sequences_in_pc'][genome_name][gene_callers_id] = AA_sequences[pc_name][genome_name][gene_callers_id]
+                data['aa_sequences_in_gene_cluster'][genome_name][gene_callers_id] = AA_sequences[gene_cluster_name][genome_name][gene_callers_id]
 
         # the dict that explains the distribution of genes in genomes:
-        data['gene_caller_ids_in_genomes'] = self.interactive.protein_clusters[pc_name]
+        data['gene_caller_ids_in_genomes'] = self.interactive.gene_clusters[gene_cluster_name]
 
         # add the list of genomes into data:
         data['genomes'] = sorted(data['gene_caller_ids_in_genomes'].keys())
 
         # get some contextual stuff
-        data['index'], data['total'], data['previous_pc_name'], data['next_pc_name'] = self.get_index_total_previous_and_next_items(pc_name)
+        data['index'], data['total'], data['previous_gene_cluster_name'], data['next_gene_cluster_name'] = self.get_index_total_previous_and_next_items(gene_cluster_name)
 
         return json.dumps(data)
+
+
+    def search_functions_in_splits(self):
+        try:
+            search_terms = [s.strip() for s in request.forms.get('terms').split(',')]
+            matching_split_names_dict, full_report = self.interactive.search_splits_for_gene_functions(search_terms, verbose=False)
+            return json.dumps({'status': 0, 'results': full_report})
+        except Exception as e:
+            message = str(e.clear_text()) if hasattr(e, 'clear_text') else str(e)
+            return json.dumps({'status': 1, 'message': message})
 
 
     def store_refined_bins(self):
@@ -702,24 +739,28 @@ class BottleApplication(Bottle):
     def get_available_phylogeny_programs(self):
         return json.dumps(list(drivers.driver_modules['phylogeny'].keys()))
 
+    def get_available_aligners(self):
+        return json.dumps(list(drivers.Aligners().aligners.keys()))
 
     def generate_tree(self):
-        pcs = set(request.forms.getall('pcs[]'))
+        gene_clusters = set(request.forms.getall('gene_clusters[]'))
         name = request.forms.get('name')
         skip_multiple_gene_calls = request.forms.get('skip_multiple_genes')
         program = request.forms.get('program')
+        aligner = request.forms.get('aligner')
         store_tree = request.forms.get('store_tree')
 
         temp_fasta_file = filesnpaths.get_temp_file_path()
         temp_tree_file = filesnpaths.get_temp_file_path()
         tree_text = None
-        
+
         try:
-            self.interactive.write_AA_sequences_for_phylogenomics(pc_names=pcs, output_file_path=temp_fasta_file, skip_multiple_gene_calls=skip_multiple_gene_calls)
+            self.interactive.write_sequences_in_gene_clusters_for_phylogenomics(gene_cluster_names=gene_clusters, output_file_path=temp_fasta_file, skip_multiple_gene_calls=skip_multiple_gene_calls, align_with=aligner)
             drivers.driver_modules['phylogeny'][program]().run_command(temp_fasta_file, temp_tree_file)
             tree_text = open(temp_tree_file,'rb').read().decode()
 
             if store_tree:
+                # FIXME: This will break:
                 if not self.interactive.samples_information_db_path:
                     raise ConfigError("This project does not have samples db")
 
@@ -748,19 +789,19 @@ class BottleApplication(Bottle):
                 utils.store_array_as_TAB_delimited_file(self.interactive.views[view_name][1:], view_path, self.interactive.views[view_name][0])
                 args.view_data = view_path
 
-            ordering_name = request.forms.get('ordering')
-            if ordering_name in self.interactive.p_meta['clusterings']:
+            item_order_name = request.forms.get('ordering')
+            if item_order_name in self.interactive.p_meta['item_orders']:
                 ordering_path = filesnpaths.get_temp_file_path()
-                items_ordering = self.interactive.p_meta['clusterings'][ordering_name]
+                items_order = self.interactive.p_meta['item_orders'][item_order_name]
 
                 f = open(ordering_path, 'w')
-                if 'newick' in items_ordering:
-                    f.write(items_ordering['newick'])
-                elif 'basic' in items_ordering:
-                    f.write(",".join(items_ordering['basic']))
+                if items_order['type'] == 'newick':
+                    f.write(items_order['data'])
+                    args.tree = ordering_path
+                elif items_order['type'] == 'basic':
+                    f.write("\n".join(items_order['data']))
+                    args.items_order = ordering_path
                 f.close()
-
-                args.tree = ordering_path
 
             state_name = request.forms.get('state')
             if state_name in self.interactive.states_table.states:
@@ -780,15 +821,16 @@ class BottleApplication(Bottle):
                 args.description = description_path
 
             if request.forms.get('include_samples') == "true":
+                # FIXME: this will break
                 if len(self.interactive.samples_order_dict):
                     samples_order_path = filesnpaths.get_temp_file_path()
                     utils.store_dict_as_TAB_delimited_file(self.interactive.samples_order_dict, samples_order_path, headers=['attributes', 'basic', 'newick'])
                     args.samples_order_file = samples_order_path
 
-                if len(self.interactive.samples_information_dict):
-                    samples_info_path = filesnpaths.get_temp_file_path()
-                    utils.store_dict_as_TAB_delimited_file(self.interactive.samples_information_dict, samples_info_path)
-                    args.samples_information_file = samples_info_path
+                if len(self.interactive.layers_additional_data_dict):
+                    layers_additional_data_path = filesnpaths.get_temp_file_path()
+                    utils.store_dict_as_TAB_delimited_file(self.interactive.layers_additional_data_dict, layers_additional_data_path)
+                    args.layers_additional_data_file = layers_additional_data_path
 
             collection_name = request.forms.get('collection')
             if collection_name in self.interactive.collections.collections_dict:
@@ -805,3 +847,7 @@ class BottleApplication(Bottle):
         except Exception as e:
             message = str(e.clear_text()) if hasattr(e, 'clear_text') else str(e)
             return json.dumps({'status': 1, 'message': message})
+
+
+    def get_contigs_stats(self):
+        return json.dumps({'stats': self.interactive.contigs_stats, 'tables': self.interactive.tables})

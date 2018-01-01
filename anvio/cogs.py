@@ -24,8 +24,8 @@ from anvio.errors import ConfigError
 COG_DATA_VERSION='2'
 
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2016, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -78,8 +78,8 @@ class COGs:
                                 database formatted under the COGs data directory for that program :/ You may need to\
                                 re-run the COGs setup, UNLESS, you set up your COG data directory somewhere else than what\
                                 anvi'o attempts to use at the moment ('%s'). If that is the case, this may be the best\
-                                time to point the right directory using the --cog-data-dir parameter." % \
-                                                                                (self.search_with, self.COG_data_dir))
+                                time to point the right directory using the --cog-data-dir parameter, or the environmental\
+                                variable 'ANVIO_COG_DATA_DIR'." % (self.search_with, self.COG_data_dir))
 
         if not aa_sequences_file_path and not self.contigs_db_path:
             raise ConfigError("You either need to provide an anvi'o contigs database path, or a FASTA file for AA\
@@ -150,7 +150,11 @@ class COGs:
         for gene_callers_id in self.hits:
             ncbi_protein_id = self.hits[gene_callers_id]['hit']
 
-            COG_ids = cogs_data.p_id_to_cog_id[ncbi_protein_id]
+            in_proteins_FASTA_not_in_cogs_CSV = []
+            if ncbi_protein_id not in cogs_data.p_id_to_cog_id:
+                in_proteins_FASTA_not_in_cogs_CSV.append((ncbi_protein_id, gene_callers_id),)
+            else:
+                COG_ids = cogs_data.p_id_to_cog_id[ncbi_protein_id]
 
             annotations = []
             categories = set([])
@@ -183,6 +187,24 @@ class COGs:
             self.run.warning('Although your COGs are successfully added to the database, there were some COG IDs your genes hit\
                               were among the ones that were not described in the raw data. Here is the list of %d COG IDs that\
                               were hit %d times: %s.' % (len(missing_cogs_found), hits_for_missing_cogs, ', '.join(missing_cogs_found)))
+
+        if len(in_proteins_FASTA_not_in_cogs_CSV):
+            # so some of the hits represented in the FASTA file from the NCBI were not put in the
+            # CSV file from NCBI to associate them with COGs
+            report_output_file_path = filesnpaths.get_temp_file_path()
+            report_output = open(report_output_file_path, 'w')
+            report_output.write('anvio_gene_callers_id\tNCBI_protein_id\n')
+
+            for protein_id, gene_callers_id in in_proteins_FASTA_not_in_cogs_CSV:
+                report_output.write('%s\t%s\n' % (gene_callers_id, protein_id))
+
+            report_output.close()
+
+            self.run.warning("This is important. %s hits for your genes that appeared in the proteins FASTA file from the NCBI had protein\
+                              IDs that were not described in the CSV file from the NCBI that associates each protein ID with a COG function.\
+                              That's OK if you don't care. But if you would like to take a look, anvi'o stored a report\
+                              file for you at %s" \
+                        % (len(in_proteins_FASTA_not_in_cogs_CSV), report_output_file_path))
 
 
     def search_with_diamond(self, aa_sequences_file_path):
@@ -285,15 +307,28 @@ class COGsSetup:
         self.num_threads = A('num_threads') or 1
         self.just_do_it = A('just_do_it')
         self.reset = A('reset')
-        self.COG_data_dir = cog_data_dir or A('cog_data_dir')
+        self.cog_data_source = 'unknown'
 
-        if not self.COG_data_dir:
-            self.COG_data_dir = J(os.path.dirname(anvio.__file__), 'data/misc/COG')
+        if cog_data_dir:
+            self.COG_data_dir = cog_data_dir
+            self.cog_data_source = 'The function call.'
+        elif A('cog_data_dir'):
+            self.COG_data_dir = A('cog_data_dir')
+            self.cog_data_source = 'The command line parameter.'
+        elif 'ANVIO_COG_DATA_DIR' in os.environ:
+            self.COG_data_dir = os.environ['ANVIO_COG_DATA_DIR']
+            self.cog_data_source = 'The environmental variable.'
         else:
-            self.COG_data_dir = os.path.abspath(os.path.expanduser(self.COG_data_dir))
+            self.COG_data_dir = J(os.path.dirname(anvio.__file__), 'data/misc/COG')
+            self.cog_data_source = "The anvi'o default."
+
+        self.COG_data_dir = os.path.abspath(os.path.expanduser(self.COG_data_dir))
 
         self.COG_data_dir_version = J(self.COG_data_dir, '.VERSION')
         self.raw_NCBI_files_dir = J(self.COG_data_dir, 'RAW_DATA_FROM_NCBI')
+
+        self.run.info('COG data directory', self.COG_data_dir)
+        self.run.info('COG data source', self.cog_data_source)
 
         self.files = {
                 'cog2003-2014.csv': {

@@ -3,6 +3,7 @@
 # v.140713
 """A very lightweight FASTA I/O library"""
 
+import io
 import sys
 import gzip
 import numpy
@@ -10,8 +11,8 @@ import hashlib
 
 import anvio
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2015, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -96,7 +97,7 @@ class SequenceSource():
         if self.compressed:
             self.file_pointer = gzip.open(self.fasta_file_path)
         else:
-            self.file_pointer = open(self.fasta_file_path, 'rU')
+            self.file_pointer = io.open(self.fasta_file_path, 'rU', newline='')
 
         if not self.file_pointer.read(1) == '>':
             raise FastaLibError("File '%s' does not seem to be a FASTA file." % self.fasta_file_path)

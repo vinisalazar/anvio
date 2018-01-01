@@ -20,8 +20,8 @@ import anvio.summarizer as summarizer
 from anvio.errors import ConfigError, FilesNPathsError
 
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2015, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -74,7 +74,6 @@ if __name__ == '__main__':
                                         are summarizing a pan profile).")
     groupD = parser.add_argument_group('COMMONS', "Common parameters for both pan and standard profile summaries.")
 
-
     groupA.add_argument(*anvio.A('pan-or-profile-db'), **anvio.K('pan-or-profile-db'))
     groupB.add_argument(*anvio.A('contigs-db'), **anvio.K('contigs-db', {'required': False}))
     groupB.add_argument(*anvio.A('genomes-storage'), **anvio.K('genomes-storage', {'required': False}))
@@ -87,7 +86,11 @@ if __name__ == '__main__':
     groupD.add_argument(*anvio.A('quick-summary'), **anvio.K('quick-summary'))
     groupD.add_argument(*anvio.A('debug'), **anvio.K('debug'))
 
-    args = parser.parse_args()
+    groupC.add_argument('--report-aa-seqs-for-gene-calls', default=False, action='store_true', help="You can use this flag if\
+                                  you would like to find translated DNA sequences for your gene calls in the genes output\
+                                  file.")
+
+    args = anvio.get_args(parser)
 
     try:
         main(args)

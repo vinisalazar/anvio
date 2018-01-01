@@ -24,8 +24,8 @@ from anvio.errors import ConfigError
 from anvio.clusteringconfuguration import ClusteringConfiguration
 
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2017, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -39,7 +39,7 @@ run = terminal.Run()
 progress = terminal.Progress()
 
 
-class MergedProfileSplitter:
+class ProfileSplitter:
     def __init__(self, args, run=run, progress=progress):
         self.args = args
         self.run = run
@@ -68,9 +68,13 @@ class MergedProfileSplitter:
         dbops.is_profile_db_and_contigs_db_compatible(self.profile_db_path, self.contigs_db_path)
 
         profile_db = dbops.ProfileDatabase(self.profile_db_path)
-        if profile_db.meta['db_type'] != 'profile' or profile_db.meta['blank'] or not profile_db.meta['merged']:
-            raise ConfigError("You an only split merged profiles :/ We hope this is not a moment of a terrible disappointment.\
-                               If it is, you should consider writing to us.")
+        if profile_db.meta['blank']:
+            raise ConfigError("The anvi-split workflow is not prepared to deal with blank profiles :/ Sorry!")
+
+        if profile_db.meta['db_type'] != 'profile':
+            raise ConfigError("Anvi'o was trying to split this profile, but it just realized that it is not a profile\
+                               database. There is something wrong here.")
+        profile_db.disconnect()
 
         self.summary = summarizer.ProfileSummarizer(self.args)
         self.summary.init()
@@ -98,9 +102,6 @@ class MergedProfileSplitter:
             b = BinSplitter(bin_name, self.summary, self.args, run=self.run, progress=self.progress)
             b.do_contigs_db()
             b.do_profile_db()
-
-            if self.summary.auxiliary_contigs_data_available:
-                b.do_auxiliary_contigs_data()
 
             if self.summary.auxiliary_profile_data_available:
                 b.do_auxiliary_profile_data()
@@ -185,7 +186,7 @@ class BinSplitter(summarizer.Bin):
                     t.contig_sequences_table_name: ('contig', self.contig_names),
                     t.contigs_info_table_name: ('contig', self.contig_names),
                     t.gene_function_calls_table_name: ('gene_callers_id', self.gene_caller_ids),
-                    t.gene_protein_sequences_table_name: ('gene_callers_id', self.gene_caller_ids),
+                    t.gene_amino_acid_sequences_table_name: ('gene_callers_id', self.gene_caller_ids),
                     t.genes_in_contigs_table_name: ('gene_callers_id', self.gene_caller_ids),
                     t.genes_in_splits_table_name: ('gene_callers_id', self.gene_caller_ids),
                     t.genes_in_splits_summary_table_name: ('split', self.split_names),
@@ -194,6 +195,7 @@ class BinSplitter(summarizer.Bin):
                     t.hmm_hits_splits_table_name: ('split', self.split_names),
                     t.splits_info_table_name: ('split', self.split_names),
                     t.splits_taxonomy_table_name: ('split', self.split_names),
+                    t.nt_position_info_table_name: ('contig_name', self.contig_names),
                     'kmer_contigs': ('contig', self.split_names),
                     'kmer_splits': ('contig', self.split_names),
                 }
@@ -222,6 +224,7 @@ class BinSplitter(summarizer.Bin):
             for sample_name in sample_coverages:
                 bin_profile_auxiliary.append(split_name, sample_name, sample_coverages[sample_name])
 
+        bin_profile_auxiliary.store()
         bin_profile_auxiliary.close()
         parent_profile_auxiliary.close()
 
@@ -232,32 +235,13 @@ class BinSplitter(summarizer.Bin):
         self.progress.end()
 
 
-    def do_auxiliary_contigs_data(self):
-        self.progress.new('Splitting "%s"' % self.bin_id)
-        self.progress.update('Subsetting the auxiliary data (for contigs db)')
-
-        new_auxiliary_contigs_data_path = dbops.get_auxiliary_data_path_for_contigs_db(self.bin_contigs_db_path)
-        parent_auxiliary_contigs_data_path = self.summary.auxiliary_contigs_data_path
-
-        bin_contigs_auxiliary = auxiliarydataops.AuxiliaryDataForNtPositions(new_auxiliary_contigs_data_path,
-                                                                                self.contigs_db_hash,
-                                                                                create_new=True)
-
-        parent_contigs_auxiliary = auxiliarydataops.AuxiliaryDataForNtPositions(parent_auxiliary_contigs_data_path,
-                                                                                self.summary.a_meta['contigs_db_hash'])
-
-        for contig_name in self.contig_names:
-            bin_contigs_auxiliary.append(contig_name, parent_contigs_auxiliary.get(contig_name))
-
-        bin_contigs_auxiliary.close()
-        parent_contigs_auxiliary.close()
-
-        self.progress.end()
-
-
     def do_profile_db(self):
+        # are we working with a merged profile database?
+        merged = self.summary.p_meta['merged']
+        self.run.info('Merged database', 'True' if merged else 'False')
+
         self.progress.new('Splitting "%s"' % self.bin_id)
-        self.progress.update('Subsetting the profile database')
+        self.progress.update('Subsetting the %s profile database' % 'merged' if merged else 'single')
 
         bin_profile_db = dbops.ProfileDatabase(self.bin_profile_db_path)
         bin_profile_db.touch()
@@ -280,14 +264,25 @@ class BinSplitter(summarizer.Bin):
         # create them, and we have to do it here ourselves. while creating them in the target
         # db, we will also populate the tables dictionary for data migration::
         sample_names = self.summary.p_meta['samples']
-        for table_name in t.atomic_data_table_structure[1:-1]:
-            for target in ['splits', 'contigs']:
-                new_table_name = '_'.join([table_name, target])
-                new_table_structure = ['contig'] + sample_names + ['__parent__']
-                new_table_types = ['text'] + ['numeric'] * len(sample_names) + ['text']
-                bin_profile_db.db.create_table(new_table_name, new_table_structure, new_table_types)
+        if merged:
+            for table_name in t.atomic_data_table_structure[1:-1]:
+                for target in ['splits', 'contigs']:
+                    new_table_name = '_'.join([table_name, target])
+                    new_table_structure = ['contig'] + sample_names + ['__parent__']
+                    new_table_types = ['text'] + ['numeric'] * len(sample_names) + ['text']
+                    bin_profile_db.db.create_table(new_table_name, new_table_structure, new_table_types)
 
-                tables[new_table_name] = ('contig', self.split_names)
+                    tables[new_table_name] = ('contig', self.split_names)
+        else:
+            profile_db = dbops.ProfileDatabase(self.profile_db_path)
+            table_structure = profile_db.db.get_table_structure('atomic_data_contigs')
+            table_types = profile_db.db.get_table_column_types('atomic_data_contigs')
+            for table_name in ['atomic_data_splits', 'atomic_data_contigs']:
+                new_table_structure = profile_db.db.get_table_structure(table_name)
+                bin_profile_db.db.create_table(table_name, table_structure, table_types)
+
+                tables[table_name] = ('contig', self.split_names)
+
 
         # we need to migrate these guys, too.
         tables[t.variable_nts_table_name] = ('split_name', self.split_names)
@@ -297,14 +292,13 @@ class BinSplitter(summarizer.Bin):
 
         self.migrate_data(tables, self.profile_db_path, self.bin_profile_db_path)
 
-
         self.progress.end()
- 
+
         if not self.skip_hierarchical_clustering:
-            dbops.do_hierarchical_clusterings(self.bin_profile_db_path, constants.clustering_configs['merged'], self.split_names, \
-                                              self.database_paths, input_directory=self.bin_output_directory, \
-                                              default_clustering_config=constants.merged_default, distance=self.distance, \
-                                              linkage=self.linkage, run=terminal.Run(verbose=False), progress=self.progress)
+            dbops.do_hierarchical_clustering_of_items(self.bin_profile_db_path, constants.clustering_configs['merged' if merged else 'single'], self.split_names, \
+                                                      self.database_paths, input_directory=self.bin_output_directory, \
+                                                      default_clustering_config=constants.merged_default, distance=self.distance, \
+                                                      linkage=self.linkage, run=terminal.Run(verbose=False), progress=self.progress)
 
         # add a collection
         collection_dict = {'ALL_SPLITS': self.split_names}

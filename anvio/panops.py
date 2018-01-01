@@ -7,27 +7,29 @@
 """
 
 import os
+import json
 import math
+import pandas as pd
+from itertools import chain
 
 import anvio
 import anvio.utils as utils
 import anvio.dbops as dbops
 import anvio.terminal as terminal
 import anvio.constants as constants
-import anvio.summarizer as summarizer
 import anvio.clustering as clustering
 import anvio.filesnpaths as filesnpaths
 
 from anvio.drivers.blast import BLAST
-from anvio.drivers.muscle import Muscle
 from anvio.drivers.diamond import Diamond
 from anvio.drivers.mcl import MCL
+from anvio.drivers import Aligners
 
 from anvio.errors import ConfigError, FilesNPathsError
 from anvio.genomestorage import GenomeStorage
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2017, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -38,51 +40,75 @@ __email__ = "a.murat.eren@gmail.com"
 run = terminal.Run()
 progress = terminal.Progress()
 pp = terminal.pretty_print
+aligners = Aligners()
 
 
-class Pangenome(GenomeStorage):
+class Pangenome(object):
     def __init__(self, args=None, run=run, progress=progress):
-        GenomeStorage.__init__(self, args, run, progress)
-        self.init_genomes_data_storage()
-
         self.args = args
         self.run = run
         self.progress = progress
 
-        self.max_num_PCs_for_hierarchical_clustering = constants.max_num_items_for_hierarchical_clustering
+        self.max_num_gene_clusters_for_hierarchical_clustering = constants.max_num_items_for_hierarchical_clustering
 
         A = lambda x: args.__dict__[x] if x in args.__dict__ else None
+        self.genome_names_to_focus = A('genome_names')
+        self.genomes_storage_path = A('genomes_storage')
+        self.genomes = None
         self.project_name = A('project_name')
         self.output_dir = A('output_dir')
         self.num_threads = A('num_threads')
         self.skip_alignments = A('skip_alignments')
+        self.align_with = A('align_with')
         self.overwrite_output_destinations = A('overwrite_output_destinations')
         self.debug = A('debug')
         self.min_percent_identity = A('min_percent_identity')
-        self.PC_min_occurrence = A('min_occurrence')
+        self.gene_cluster_min_occurrence = A('min_occurrence')
         self.mcl_inflation = A('mcl_inflation')
         self.sensitive = A('sensitive')
-        self.maxbit = A('maxbit')
+        self.minbit = A('minbit')
         self.use_ncbi_blast = A('use_ncbi_blast')
         self.exclude_partial_gene_calls = A('exclude_partial_gene_calls')
         self.description_file_path = A('description')
         self.skip_hierarchical_clustering = A('skip_hierarchical_clustering')
         self.enforce_hierarchical_clustering = A('enforce_hierarchical_clustering')
 
-        # when it is time to organize PCs
+        # when it is time to organize gene_clusters
         self.linkage = A('linkage') or constants.linkage_method_default
         self.distance = A('distance') or constants.distance_metric_default
 
         self.log_file_path = None
 
         # to be filled during init:
-        self.protein_sequences_dict = {}
+        self.amino_acid_sequences_dict = {}
         self.view_data = {}
         self.view_data_presence_absence = {}
         self.additional_view_data = {}
+        self.aligner = None
 
         # we don't know what we are about
         self.description = None
+
+
+    def load_genomes(self):
+        # genome_name parameter can be a file or comma seperated genome names.
+        if self.genome_names_to_focus:
+            if filesnpaths.is_file_exists(self.genome_names_to_focus, dont_raise=True):
+                self.genome_names_to_focus = utils.get_column_data_from_TAB_delim_file(self.genome_names_to_focus, column_indices=[0], expected_number_of_fields=1)[0]
+            else:
+                self.genome_names_to_focus = [g.strip() for g in self.genome_names_to_focus.split(',')]
+
+            self.run.warning("A subset of genome names is found, and anvi'o will focus only on to those.")
+
+        self.genomes_storage = GenomeStorage(self.genomes_storage_path, storage_hash=None, genome_names_to_focus=self.genome_names_to_focus)
+        self.genomes = self.genomes_storage.get_genomes_dict()
+
+        self.external_genome_names = [g for g in self.genomes if self.genomes[g]['external_genome']]
+        self.internal_genome_names = [g for g in self.genomes if not self.genomes[g]['external_genome']]
+
+        self.hash_to_genome_name = {}
+        for genome_name in self.genomes:
+            self.hash_to_genome_name[self.genomes[genome_name]['genome_hash']] = genome_name
 
 
     def generate_pan_db(self):
@@ -90,21 +116,24 @@ class Pangenome(GenomeStorage):
                        'external_genome_names': ','.join(self.external_genome_names),
                        'num_genomes': len(self.genomes),
                        'min_percent_identity': self.min_percent_identity,
-                       'pc_min_occurrence': self.PC_min_occurrence,
+                       'gene_cluster_min_occurrence': self.gene_cluster_min_occurrence,
                        'mcl_inflation': self.mcl_inflation,
-                       'default_view': 'PC_presence_absence',
+                       'default_view': 'gene_cluster_presence_absence',
                        'use_ncbi_blast': self.use_ncbi_blast,
                        'diamond_sensitive': self.sensitive,
-                       'maxbit': self.maxbit,
+                       'minbit': self.minbit,
                        'exclude_partial_gene_calls': self.exclude_partial_gene_calls,
                        'gene_alignments_computed': False if self.skip_alignments else True,
-                       'genomes_storage_hash': self.genomes_storage_hash,
+                       'genomes_storage_hash': self.genomes_storage.get_storage_hash(),
                        'project_name': self.project_name,
-                       'PCs_clustered': False,
+                       'gene_clusters_clustered': False,
                        'description': self.description if self.description else '_No description is provided_',
                       }
 
         dbops.PanDatabase(self.pan_db_path, quiet=False).create(meta_values)
+
+        # know thyself.
+        self.args.pan_db = self.pan_db_path
 
 
     def get_output_file_path(self, file_name, delete_if_exists=False):
@@ -156,11 +185,11 @@ class Pangenome(GenomeStorage):
         filesnpaths.is_output_file_writable(self.log_file_path)
         os.remove(self.log_file_path) if os.path.exists(self.log_file_path) else None
 
-        if not isinstance(self.maxbit, float):
-            raise ConfigError("maxbit value must be of type float :(")
+        if not isinstance(self.minbit, float):
+            raise ConfigError("minbit value must be of type float :(")
 
-        if self.maxbit < 0 or self.maxbit > 1:
-            raise ConfigError("Well. maxbit must be between 0 and 1. Yes. Very boring.")
+        if self.minbit < 0 or self.minbit > 1:
+            raise ConfigError("Well. minbit must be between 0 and 1. Yes. Very boring.")
 
         if not isinstance(self.min_percent_identity, float):
             raise ConfigError("Minimum percent identity value must be of type float :(")
@@ -182,15 +211,18 @@ class Pangenome(GenomeStorage):
             filesnpaths.is_file_plain_text(self.description_file_path)
             self.description = open(os.path.abspath(self.description_file_path), 'rU').read()
 
+        if not self.skip_alignments:
+            self.aligner = aligners.select(self.align_with)
+
         self.pan_db_path = self.get_output_file_path(self.project_name + '-PAN.db')
 
 
-    def run_diamond(self, unique_proteins_fasta_path, unique_proteins_names_dict):
-        diamond = Diamond(unique_proteins_fasta_path, run=self.run, progress=self.progress,
+    def run_diamond(self, unique_AA_sequences_fasta_path, unique_AA_sequences_names_dict):
+        diamond = Diamond(unique_AA_sequences_fasta_path, run=self.run, progress=self.progress,
                           num_threads=self.num_threads, overwrite_output_destinations=self.overwrite_output_destinations)
 
-        diamond.names_dict = unique_proteins_names_dict
-        diamond.target_db_path = self.get_output_file_path(filesnpaths.get_name_from_file_path(unique_proteins_fasta_path))
+        diamond.names_dict = unique_AA_sequences_names_dict
+        diamond.target_db_path = self.get_output_file_path(filesnpaths.get_name_from_file_path(unique_AA_sequences_fasta_path))
         diamond.search_output_path = self.get_output_file_path('diamond-search-results')
         diamond.tabular_output_path = self.get_output_file_path('diamond-search-results.txt')
 
@@ -199,26 +231,26 @@ class Pangenome(GenomeStorage):
         return diamond.get_blastall_results()
 
 
-    def run_blast(self, unique_proteins_fasta_path, unique_proteins_names_dict):
-        self.run.warning("You elected to use NCBI's blastp for protein search. Running blastp will be significantly\
-                          slower than DIAMOND (although, anvi'o developers are convinced that you *are*\
-                          doing the right thing, so, kudos to you).")
-        blast = BLAST(unique_proteins_fasta_path, run=self.run, progress=self.progress,
+    def run_blast(self, unique_AA_sequences_fasta_path, unique_AA_sequences_names_dict):
+        self.run.warning("You elected to use NCBI's blastp for amino acid sequence search. Running blastp will \
+                          be significantly slower than DIAMOND (although, anvi'o developers are convinced that \
+                          you *are* doing the right thing, so, kudos to you).")
+        blast = BLAST(unique_AA_sequences_fasta_path, run=self.run, progress=self.progress,
                           num_threads=self.num_threads, overwrite_output_destinations=self.overwrite_output_destinations)
 
-        blast.names_dict = unique_proteins_names_dict
+        blast.names_dict = unique_AA_sequences_names_dict
         blast.log_file_path = self.log_file_path
-        blast.target_db_path = self.get_output_file_path(filesnpaths.get_name_from_file_path(unique_proteins_fasta_path))
+        blast.target_db_path = self.get_output_file_path(filesnpaths.get_name_from_file_path(unique_AA_sequences_fasta_path))
         blast.search_output_path = self.get_output_file_path('blast-search-results.txt')
 
         return blast.get_blastall_results()
 
 
-    def run_search(self, unique_proteins_fasta_path, unique_proteins_names_dict):
+    def run_search(self, unique_AA_sequences_fasta_path, unique_AA_sequences_names_dict):
         if self.use_ncbi_blast:
-            return self.run_blast(unique_proteins_fasta_path, unique_proteins_names_dict)
+            return self.run_blast(unique_AA_sequences_fasta_path, unique_AA_sequences_names_dict)
         else:
-            return self.run_diamond(unique_proteins_fasta_path, unique_proteins_names_dict)
+            return self.run_diamond(unique_AA_sequences_fasta_path, unique_AA_sequences_names_dict)
 
 
     def run_mcl(self, mcl_input_file_path):
@@ -242,11 +274,11 @@ class Pangenome(GenomeStorage):
 
         # here we perform an initial pass on the blast results to fill the dict that will hold
         # the bit score for each gene when it was blasted against itself. this dictionary
-        # will then be used to calculate the 'maxbit' value between two genes, which I learned
-        # from ITEP (Benedict MN et al, doi:10.1186/1471-2164-15-8). ITEP defines maxbit as
+        # will then be used to calculate the 'minbit' value between two genes, which I learned
+        # from ITEP (Benedict MN et al, doi:10.1186/1471-2164-15-8). ITEP defines minbit as
         # 'bit score between target and query / min(selfbit for query, selbit for target)'. This
         # heuristic approach provides a mean to set a cutoff to eliminate weak matches between
-        # two genes. maxbit value reaches to 1 for hits between two genes that are almost identical.
+        # two genes. minbit value reaches to 1 for hits between two genes that are almost identical.
         self_bit_scores = {}
         line_no = 1
         self.progress.update('(initial pass of the serach results to set the self bit scores ...)')
@@ -272,15 +304,15 @@ class Pangenome(GenomeStorage):
         ids_without_self_search = all_ids - set(self_bit_scores.keys())
         if len(ids_without_self_search):
             search_tool = 'BLAST' if self.use_ncbi_blast else 'DIAMOND'
-            self.run.warning("%s did not retun search results for %d of %d the protein sequences in your input FASTA file.\
+            self.run.warning("%s did not retun search results for %d of %d the amino acid sequences in your input FASTA file.\
                               Anvi'o will do some heuristic magic to complete the missing data in the search output to recover\
-                              from this. But since you are a scientist, here are the protein sequence IDs for which %s\
+                              from this. But since you are a scientist, here are the amino acid sequence IDs for which %s\
                               failed to report self search results: %s." \
                                                     % (search_tool, len(ids_without_self_search), len(all_ids), \
                                                        search_tool, ', '.join(ids_without_self_search)))
 
         # HEURISTICS TO ADD MISSING SELF SEARCH RESULTS
-        # we are here, because protein sequences in ids_without_self_search did not have any hits in the search output
+        # we are here, because amino acid sequences in ids_without_self_search did not have any hits in the search output
         # although they were in the FASTA file the target database were built from. so we will make sure they are not
         # missing from self_bit_scores dict, or mcl_input (additional mcl inputs will be stored in the following dict)
         additional_mcl_input_lines = {}
@@ -304,7 +336,7 @@ class Pangenome(GenomeStorage):
 
         # CONTINUE AS IF NOTHING HAPPENED
         self.run.info('Min percent identity', self.min_percent_identity)
-        self.run.info('Maxbit', self.maxbit)
+        self.run.info('Minbit', self.minbit)
         self.progress.new('Processing search results')
 
         mcl_input_file_path = self.get_output_file_path('mcl-input.txt')
@@ -330,10 +362,10 @@ class Pangenome(GenomeStorage):
                 continue
 
             #
-            # FILTERING BASED ON MAXBIT
+            # FILTERING BASED ON MINBIT
             #
-            maxbit = bit_score / min(self_bit_scores[query_id], self_bit_scores[subject_id])
-            if maxbit < self.maxbit:
+            minbit = bit_score / min(self_bit_scores[query_id], self_bit_scores[subject_id])
+            if minbit < self.minbit:
                 continue
 
             mcl_input.write('%s\t%s\t%f\n' % (query_id, subject_id, perc_id / 100.0))
@@ -353,115 +385,151 @@ class Pangenome(GenomeStorage):
         return mcl_input_file_path
 
 
-    def process_protein_clusters(self, protein_clusters_dict):
+    def process_gene_clusters(self, gene_clusters_dict):
         self.progress.new('Generating view data')
         self.progress.update('...')
 
-        PCs = list(protein_clusters_dict.keys())
+        gene_clusters = list(gene_clusters_dict.keys())
 
-        for PC in PCs:
-            self.view_data[PC] = dict([(genome_name, 0) for genome_name in self.genomes])
-            self.view_data_presence_absence[PC] = dict([(genome_name, 0) for genome_name in self.genomes])
-            self.additional_view_data[PC] = {'num_genes_in_pc': 0, 'num_genomes_pc_has_hits': 0, 'SCG': 0}
+        for gene_cluster in gene_clusters:
+            self.view_data[gene_cluster] = dict([(genome_name, 0) for genome_name in self.genomes])
+            self.view_data_presence_absence[gene_cluster] = dict([(genome_name, 0) for genome_name in self.genomes])
+            self.additional_view_data[gene_cluster] = {'num_genes_in_gene_cluster': 0, 'num_genomes_gene_cluster_has_hits': 0, 'SCG': 0}
 
-            for gene_entry in protein_clusters_dict[PC]:
+            for gene_entry in gene_clusters_dict[gene_cluster]:
                 genome_name = gene_entry['genome_name']
 
-                self.view_data[PC][genome_name] += 1
-                self.view_data_presence_absence[PC][genome_name] = 1
-                self.additional_view_data[PC]['num_genes_in_pc'] += 1
+                self.view_data[gene_cluster][genome_name] += 1
+                self.view_data_presence_absence[gene_cluster][genome_name] = 1
+                self.additional_view_data[gene_cluster]['num_genes_in_gene_cluster'] += 1
 
-            self.additional_view_data[PC]['SCG'] = 1 if set(self.view_data[PC].values()) == set([1]) else 0
+            self.additional_view_data[gene_cluster]['SCG'] = 1 if set(self.view_data[gene_cluster].values()) == set([1]) else 0
 
-            self.additional_view_data[PC]['num_genomes_pc_has_hits'] = len([True for genome in self.view_data[PC] if self.view_data[PC][genome] > 0])
+            self.additional_view_data[gene_cluster]['num_genomes_gene_cluster_has_hits'] = len([True for genome in self.view_data[gene_cluster] if self.view_data[gene_cluster][genome] > 0])
 
         self.progress.end()
 
         ########################################################################################
         #                           FILTERING BASED ON OCCURRENCE
         ########################################################################################
-        PCs_of_interest = set([])
-        for PC in PCs:
-            if self.additional_view_data[PC]['num_genomes_pc_has_hits'] >= self.PC_min_occurrence:
-                PCs_of_interest.add(PC)
+        gene_clusters_of_interest = set([])
+        for gene_cluster in gene_clusters:
+            if self.additional_view_data[gene_cluster]['num_genomes_gene_cluster_has_hits'] >= self.gene_cluster_min_occurrence:
+                gene_clusters_of_interest.add(gene_cluster)
 
-        removed_PCs = 0
-        for PC in PCs:
-            if PC not in PCs_of_interest:
-                self.view_data.pop(PC)
-                self.view_data_presence_absence.pop(PC)
-                self.additional_view_data.pop(PC)
-                protein_clusters_dict.pop(PC)
-                removed_PCs += 1
+        removed_gene_clusters = 0
+        for gene_cluster in gene_clusters:
+            if gene_cluster not in gene_clusters_of_interest:
+                self.view_data.pop(gene_cluster)
+                self.view_data_presence_absence.pop(gene_cluster)
+                self.additional_view_data.pop(gene_cluster)
+                gene_clusters_dict.pop(gene_cluster)
+                removed_gene_clusters += 1
 
-        if self.PC_min_occurrence > 1:
-            self.run.info('PCs min occurrence', '%d (the filter removed %d PCs)' % (self.PC_min_occurrence, removed_PCs))
+        if self.gene_cluster_min_occurrence > 1:
+            self.run.info('gene_clusters min occurrence', '%d (the filter removed %d gene_clusters)' % (self.gene_cluster_min_occurrence, removed_gene_clusters))
 
         ########################################################################################
         #            CAN WE CLUSTER THIS STUFF? DOES THE USER WANT US TO TRY REGARDLESS?
         ########################################################################################
-        if len(protein_clusters_dict) > self.max_num_PCs_for_hierarchical_clustering:
+        if len(gene_clusters_dict) > self.max_num_gene_clusters_for_hierarchical_clustering:
             if self.enforce_hierarchical_clustering:
-                self.run.warning("You have %s PCs, which exceeds the number of PCs anvi'o is comfortable to cluster. But\
+                self.run.warning("You have %s gene_clusters, which exceeds the number of gene_clusters anvi'o is comfortable to cluster. But\
                                   since you have used the flag `--enforce-hierarchical-clustering`, anvi'o will attempt\
-                                  to create a hierarchical clustering of your PCs anyway. It may take a bit of \
+                                  to create a hierarchical clustering of your gene_clusters anyway. It may take a bit of \
                                   time. Pour yourself a coffee. Or go to a nice vacation. See you in 10 mins, or next year \
-                                  or never." % pp(len(protein_clusters_dict)))
+                                  or never." % pp(len(gene_clusters_dict)))
             else:
-                self.run.warning("It seems you have %s protein clusters in your pangenome. This exceeds the soft limit\
-                                  of %s for anvi'o to attempt to create a hierarchical clustering of your protein clusters\
+                self.run.warning("It seems you have %s gene clusters in your pangenome. This exceeds the soft limit\
+                                  of %s for anvi'o to attempt to create a hierarchical clustering of your gene clusters\
                                   (which becomes the center tree in all anvi'o displays). If you want a hierarchical\
                                   clustering to be done anyway, please see the flag `--enforce-hierarchical-clustering`." \
-                                            % (pp(len(protein_clusters_dict)), pp(self.max_num_PCs_for_hierarchical_clustering)))
+                                            % (pp(len(gene_clusters_dict)), pp(self.max_num_gene_clusters_for_hierarchical_clustering)))
                 self.skip_hierarchical_clustering = True
 
         ########################################################################################
         #                           STORING FILTERED DATA IN THE DB
         ########################################################################################
-        table_structure=['PC'] + sorted(self.genomes.keys())
+        table_structure=['gene_cluster'] + sorted(self.genomes.keys())
         table_types=['text'] + ['numeric'] * len(self.genomes)
         dbops.TablesForViews(self.pan_db_path).create_new_view(
                                         data_dict=self.view_data,
-                                        table_name='PC_frequencies',
+                                        table_name='gene_cluster_frequencies',
                                         table_structure=table_structure,
                                         table_types=table_types,
-                                        view_name = 'PC_frequencies')
+                                        view_name = 'gene_cluster_frequencies')
 
         dbops.TablesForViews(self.pan_db_path).create_new_view(
                                         data_dict=self.view_data_presence_absence,
-                                        table_name='PC_presence_absence',
+                                        table_name='gene_cluster_presence_absence',
                                         table_structure=table_structure,
                                         table_types=table_types,
-                                        view_name = 'PC_presence_absence')
+                                        view_name = 'gene_cluster_presence_absence')
 
-        additional_data_structure = ['PC', 'num_genomes_pc_has_hits', 'num_genes_in_pc', 'SCG']
-        dbops.TablesForViews(self.pan_db_path).create_new_view(
-                                        data_dict=self.additional_view_data,
-                                        table_name='additional_data',
-                                        table_structure=additional_data_structure,
-                                        table_types=['text', 'numeric', 'numeric', 'numeric'],
-                                        view_name = None)
-
-        # add additional data structure to the self table, so we can have them initially ordered
-        # in the interface the way additional_data_structure suggests:
-        pan_db = dbops.PanDatabase(self.pan_db_path, quiet=True)
-        pan_db.db.set_meta_value('additional_data_headers', ','.join(additional_data_structure[1:]))
-        pan_db.disconnect()
+        item_additional_data_table = dbops.TableForItemAdditionalData(self.args)
+        item_additional_data_keys = ['num_genomes_gene_cluster_has_hits', 'num_genes_in_gene_cluster', 'SCG']
+        item_additional_data_table.add(self.additional_view_data, item_additional_data_keys, skip_check_names=True)
+        #                                                                                    ^^^^^^^^^^^^^^^^^^^^^
+        #                                                                                   /
+        # here we say skip_check_names=True, simply because there is no gene_clusters table has not been
+        # generated yet, but the check names functionality in dbops looks for the gene clsuters table to
+        # be certain. it is not a big deal here, since we absoluely know what gene cluster names we are
+        # working with.
 
         ########################################################################################
         #                   RETURN THE -LIKELY- UPDATED PROTEIN CLUSTERS DICT
         ########################################################################################
-        return protein_clusters_dict
+        return gene_clusters_dict
 
 
-    def cluster_protein_clusters(self):
-        """Uses a clustering configuration to add hierarchical clustering of protein clusters into the pan db
+    def gen_synteny_based_ordering_of_gene_clusters(self, gene_clusters_dict):
+        """Take the dictionary of gene_clusters, and order gene_clusters per genome based on synteny of genes.
+
+           This adds more orders to the pangenomic output so the user can enforce ordering of
+           gene_clusters based on the synteny of genes they contain in a given genome.
+
+           The synteny in this context is defined by the gene caller ids. Gene caller ids
+           follow a numerical order in anvi'o contigs databases for genes that are coming
+           from the same contig. Of course, the synteny does not mean much for genmes that
+           fragmented into multiple contigs.
+        """
+
+        # yes. this is meren converting the gene_clusters_dict into a pandas data frame :/ if you are reading
+        # this line and if you are not evan, don't tell evan about this. everyone else: i don't know
+        # what you're talking about.
+        df = pd.DataFrame(list(chain.from_iterable(list(gene_clusters_dict.values()))))
+        df = df.sort_values(by=['genome_name', 'gene_caller_id'])
+        df = df.reset_index(drop=True)
+
+        # forced synteny
+        for genome_name in df.genome_name.unique():
+            gene_clusters_in_genome = df.loc[(df.genome_name == genome_name)].gene_cluster_id.unique()
+            gene_clusters_not_described = df.loc[~df.gene_cluster_id.isin(gene_clusters_in_genome)].gene_cluster_id.unique()
+            gene_clusters_order_based_on_genome_synteny = list(gene_clusters_in_genome) + list(gene_clusters_not_described)
+
+            order_name = 'Forced synteny <> %s' % genome_name
+
+            dbops.add_items_order_to_db(self.pan_db_path, order_name, ','.join(gene_clusters_order_based_on_genome_synteny), order_data_type_newick=False, run=self.run)
+
+        gene_cluster_gene_cluster_edges = []
+        # network description of gene_cluster-gene_cluster relationshops given the gene synteny.
+        gene_ordered_list_of_gene_clusters = list(zip(df.gene_caller_id, df.gene_cluster_id))
+        for index in range(1, len(gene_ordered_list_of_gene_clusters)):
+            (GENE_A, gene_cluster_A), (GENE_B, gene_cluster_B) = gene_ordered_list_of_gene_clusters[index-1], gene_ordered_list_of_gene_clusters[index]
+            if GENE_A == GENE_B - 1:
+                gene_cluster_gene_cluster_edges.append((gene_cluster_A, gene_cluster_B), )
+
+        # FIXME: Do something with gene_cluster_gene_cluster_edges.
+
+
+    def gen_hierarchical_clustering_of_gene_clusters(self):
+        """Uses a clustering configuration to add hierarchical clustering of gene clusters into the pan db
 
         Note how this function cheats the system to create an enchanced clustering configuration:
         We want to use the clustering configurations for pan genomomic analyses to order
-        protein clusters. however, we want to add something into the clustering configuraiton
-        file, which depends on the number of genomes we have. this addition is 'num_genomes_pc_has_hits'
-        data, which pulls together protein clusters that are distributed across genomes similarly based
+        gene clusters. however, we want to add something into the clustering configuraiton
+        file, which depends on the number of genomes we have. this addition is 'num_genomes_gene_cluster_has_hits'
+        data, which pulls together gene clusters that are distributed across genomes similarly based
         on this extra bit of inofrmation. becasue the clustering configurations framework in anvi'o
         does not allow us to have variable information in these recipes, we are going to generate one
         on the fly to have a more capable one."""
@@ -479,11 +547,11 @@ class Pangenome(GenomeStorage):
 
             # setup the additional section based on the number of genomes we have:
             if config_name == 'presence-absence':
-                additional_config_section="""\n[AdditionalData !PAN.db::additional_data]\ncolumns_to_use = %s\nnormalize = False\n""" \
-                                        % ','.join(['num_genomes_pc_has_hits'] * (int(round(len(self.genomes) / 2))))
+                additional_config_section="""\n[AdditionalData !PAN.db::item_additional_data]\ntable_form=dataframe\ncolumns_to_use = %s\nnormalize = False\n""" \
+                                        % ','.join(['num_genomes_gene_cluster_has_hits'] * (int(round(len(self.genomes) / 2))))
             elif config_name == 'frequency':
-                additional_config_section="""\n[AdditionalData !PAN.db::additional_data]\ncolumns_to_use = %s\nnormalize = False\nlog=True\n""" \
-                                        % ','.join(['num_genes_in_pc'] * (int(round(math.sqrt(len(self.genomes))))))
+                additional_config_section="""\n[AdditionalData !PAN.db::item_additional_data]\ntable_form=dataframe\ncolumns_to_use = %s\nnormalize = False\nlog=True\n""" \
+                                        % ','.join(['num_genes_in_gene_cluster'] * (int(round(math.sqrt(len(self.genomes))))))
 
             # write the content down in to file at the new path:
             open(enhanced_config_path, 'w').write(open(config_path).read() + additional_config_section)
@@ -491,85 +559,43 @@ class Pangenome(GenomeStorage):
             # update the clustering configs:
             updated_clustering_configs[config_name] = enhanced_config_path
 
-            dbops.do_hierarchical_clusterings(self.pan_db_path, updated_clustering_configs, database_paths={'PAN.db': self.pan_db_path},\
-                                              input_directory=self.output_dir, default_clustering_config=constants.pan_default,\
-                                              distance=self.distance, linkage=self.linkage, run=self.run, progress=self.progress)
+            dbops.do_hierarchical_clustering_of_items(self.pan_db_path, updated_clustering_configs, database_paths={'PAN.db': self.pan_db_path},\
+                                                      input_directory=self.output_dir, default_clustering_config=constants.pan_default,\
+                                                      distance=self.distance, linkage=self.linkage, run=self.run, progress=self.progress)
 
 
-    def gen_samples_db(self):
-        samples_info_file_path = self.gen_samples_info_file()
-        samples_order_file_path = self.gen_samples_order_file()
-
-        samples_db_output_path = self.get_output_file_path(self.project_name + '-SAMPLES.db', delete_if_exists=True)
-
-        s = dbops.SamplesInformationDatabase(samples_db_output_path, run=self.run, progress=self.progress, quiet=True)
-        s.create(samples_info_file_path, samples_order_file_path)
-
-
-    def gen_samples_order_file(self):
-        self.progress.new('Samples DB')
+    def populate_layers_additional_data_and_orders(self):
+        self.progress.new('Layers additional data and orders')
         self.progress.update('Copmputing the hierarchical clustering of the (transposed) view data')
 
-        samples_order_file_path = self.get_output_file_path(self.project_name + '-samples-order.txt')
-        samples_order = open(samples_order_file_path, 'w')
-        samples_order.write('attributes\tbasic\tnewick\n')
-
-        for clustering_tuple in [('PC presence absence', self.view_data), ('PC frequencies', self.view_data_presence_absence)]:
+        layer_orders_data_dict = {}
+        for clustering_tuple in [('gene_cluster presence absence', self.view_data), ('gene_cluster frequencies', self.view_data_presence_absence)]:
             v, d = clustering_tuple
             newick = clustering.get_newick_tree_data_for_dict(d, transpose=True, distance = self.distance, linkage=self.linkage)
-            samples_order.write('%s\t\t%s\n' % (v, newick))
+            layer_orders_data_dict[v] = {'data_type': 'newick', 'data_value': newick}
 
-        samples_order.close()
+        self.progress.update('Generating layers additional data ..')
 
-        self.progress.end()
-
-        self.run.info("Anvi'o samples order", samples_order_file_path)
-
-        return samples_order_file_path
-
-
-    def gen_samples_info_file(self):
-        self.progress.new('Samples DB')
-        self.progress.update('Generating the samples information file ..')
-
-        samples_info_dict = {}
-        samples_info_file_path = self.get_output_file_path(self.project_name + '-samples-information.txt')
-
-        # set headers
-        headers = ['total_length']
+        layers_additional_data_dict = {}
+        layers_additional_data_keys = ['total_length']
 
         for h in ['percent_completion', 'percent_redundancy']:
             if h in list(self.genomes.values())[0]:
-                headers.append(h)
+                layers_additional_data_keys.append(h)
 
-        headers.extend(['gc_content', 'num_genes', 'avg_gene_length', 'num_genes_per_kb'])
+        layers_additional_data_keys.extend(['gc_content', 'num_genes', 'avg_gene_length', 'num_genes_per_kb'])
 
-        for c in list(self.genomes.values()):
+        for genome_name in self.genomes:
             new_dict = {}
-            for header in headers:
-                new_dict[header] = c[header]
+            for key in layers_additional_data_keys:
+                new_dict[key] = self.genomes[genome_name][key]
 
-            samples_info_dict[c['name']] = new_dict
-
-        utils.store_dict_as_TAB_delimited_file(samples_info_dict, samples_info_file_path, headers=['samples'] + headers)
+            layers_additional_data_dict[genome_name] = new_dict
 
         self.progress.end()
-        self.run.info("Anvi'o samples information", samples_info_file_path)
 
-        return samples_info_file_path
-
-
-    def gen_ad_hoc_anvio_run(self, view_data_file_path, experimental_data_file_path, additional_view_data_file_path, samples_info_file_path):
-        ad_hoc_run = summarizer.AdHocRunGenerator(view_data_file_path, run=self.run, progress=self.progress)
-
-        ad_hoc_run.matrix_data_for_clustering = experimental_data_file_path
-        ad_hoc_run.additional_view_data_file_path = additional_view_data_file_path
-        ad_hoc_run.samples_info_file_path = samples_info_file_path
-
-        ad_hoc_run.output_directory = self.get_output_file_path(os.path.basename(self.output_dir))
-        ad_hoc_run.delete_output_directory_if_exists = True
-
-        ad_hoc_run.generate()
+        dbops.TableForLayerOrders(self.args).add(layer_orders_data_dict)
+        dbops.TableForLayerAdditionalData(self.args).add(layers_additional_data_dict, layers_additional_data_keys)
 
 
     def sanity_check(self):
@@ -588,15 +614,12 @@ class Pangenome(GenomeStorage):
             raise ConfigError("There must be at least two genomes for this workflow to work. You have like '%d' of them :/" \
                     % len(self.genomes))
 
-        if not self.skip_alignments:
-            try:
-                Muscle()
-            except ConfigError as e:
-                raise ConfigError("It seems things are not quite in order. Anvi'o does not know what is wrong, but you will\
-                                    see the actual error message in second. You can either try to address whatever causes this problem,\
-                                    or you can use the `--skip-alignments` flag to avoid it completely (although the latter would clearly\
-                                    be the easiest way out of this, anvi'o may stop thinking so highly of you if you choose to do that,\
-                                    just FYI). Here is the actual error you got: %s." % str(e).replace('\n', '').replace('  ', ' '))
+        if self.skip_alignments and self.align_with:
+            raise ConfigError("You are asking anvi'o to skip aligning sequences within your gene clusters, and then you \
+                               are also asking it to use '%s' for aligning sequences within your gene clusters. It is easy \
+                               to ignore this and skip the alignment, but anvi'o gets nervous when it realizes her users are \
+                               being inconsistent. Please make up your mind, and come back as the explicit person you are" \
+                                                                            % self.align_with)
 
         self.check_params()
 
@@ -604,40 +627,40 @@ class Pangenome(GenomeStorage):
         self.run.info('Args', (str(self.args)), quiet=True)
 
 
-    def store_protein_clusters(self, protein_clusters_dict):
-        self.progress.new('Storing protein clusters in the database')
+    def store_gene_clusters(self, gene_clusters_dict):
+        self.progress.new('Storing gene clusters in the database')
         self.progress.update('...')
 
-        table_for_protein_clusters = dbops.TableForProteinClusters(self.pan_db_path, run=self.run, progress=self.progress)
+        table_for_gene_clusters = dbops.TableForGeneClusters(self.pan_db_path, run=self.run, progress=self.progress)
 
-        num_genes_in_protein_clusters = 0
-        for pc_name in protein_clusters_dict:
-            for gene_entry in protein_clusters_dict[pc_name]:
-                table_for_protein_clusters.add(gene_entry)
-                num_genes_in_protein_clusters += 1
+        num_genes_in_gene_clusters = 0
+        for gene_cluster_name in gene_clusters_dict:
+            for gene_entry in gene_clusters_dict[gene_cluster_name]:
+                table_for_gene_clusters.add(gene_entry)
+                num_genes_in_gene_clusters += 1
 
         self.progress.end()
 
-        table_for_protein_clusters.store()
+        table_for_gene_clusters.store()
 
         pan_db = dbops.PanDatabase(self.pan_db_path, quiet=True)
-        pan_db.db.set_meta_value('num_protein_clusters', len(protein_clusters_dict))
-        pan_db.db.set_meta_value('num_genes_in_protein_clusters', num_genes_in_protein_clusters)
+        pan_db.db.set_meta_value('num_gene_clusters', len(gene_clusters_dict))
+        pan_db.db.set_meta_value('num_genes_in_gene_clusters', num_genes_in_gene_clusters)
         pan_db.disconnect()
 
-        self.run.info('protein clusters info', '%d PCs stored in the database' % len(protein_clusters_dict))
+        self.run.info('gene clusters info', '%d gene_clusters stored in the database' % len(gene_clusters_dict))
 
 
-    def gen_protein_clusters_dict_from_mcl_clusters(self, mcl_clusters):
-        self.progress.new('Generating the protein clusters dictionary from raw MCL clusters')
+    def gen_gene_clusters_dict_from_mcl_clusters(self, mcl_clusters):
+        self.progress.new('Generating the gene clusters dictionary from raw MCL clusters')
         self.progress.update('...')
 
-        protein_clusters_dict = {}
+        gene_clusters_dict = {}
 
-        for PC in mcl_clusters:
-            protein_clusters_dict[PC] = []
+        for gene_cluster in mcl_clusters:
+            gene_clusters_dict[gene_cluster] = []
 
-            for entry_hash, gene_caller_id in [e.split('_') for e in mcl_clusters[PC]]:
+            for entry_hash, gene_caller_id in [e.split('_') for e in mcl_clusters[gene_cluster]]:
                 try:
                     genome_name = self.hash_to_genome_name[entry_hash]
                 except KeyError:
@@ -645,64 +668,78 @@ class Pangenome(GenomeStorage):
                     raise ConfigError("Something horrible happened. This can only happen if you started a new analysis with\
                                         additional genomes without cleaning the previous work directory. Sounds familiar?")
 
-                protein_clusters_dict[PC].append({'gene_caller_id': int(gene_caller_id), 'protein_cluster_id': PC, 'genome_name': genome_name, 'alignment_summary': ''})
+                gene_clusters_dict[gene_cluster].append({'gene_caller_id': int(gene_caller_id), 'gene_cluster_id': gene_cluster, 'genome_name': genome_name, 'alignment_summary': ''})
 
         self.progress.end()
 
-        return protein_clusters_dict
+        return gene_clusters_dict
 
 
-    def compute_alignments_for_PCs(self, protein_clusters_dict):
+    def compute_alignments_for_gene_clusters(self, gene_clusters_dict):
         if self.skip_alignments:
             self.run.warning('Skipping gene alignments.')
-            return protein_clusters_dict
+            return gene_clusters_dict
 
         r = terminal.Run()
         r.verbose = False
 
-        muscle = Muscle(run=r)
-
-        self.progress.new('Aligning genes in protein sequences')
+        self.progress.new('Aligning genes in amino acid sequences')
         self.progress.update('...')
-        pc_names = list(protein_clusters_dict.keys())
-        num_pcs = len(pc_names)
-        for i in range(0, num_pcs):
-            self.progress.update('%d of %d' % (i, num_pcs)) if i % 10 == 0 else None
-            pc_name = pc_names[i]
+        gene_cluster_names = list(gene_clusters_dict.keys())
+        num_gene_clusters = len(gene_cluster_names)
+        for i in range(0, num_gene_clusters):
+            self.progress.update('%d of %d' % (i, num_gene_clusters)) if i % 10 == 0 else None
+            gene_cluster_name = gene_cluster_names[i]
 
-            if len(protein_clusters_dict[pc_name]) == 1:
+            if len(gene_clusters_dict[gene_cluster_name]) == 1:
                 # this sequence is a singleton and does not need alignment
                 continue
 
-            gene_sequences_in_pc = []
-            for gene_entry in protein_clusters_dict[pc_name]:
+            gene_sequences_in_gene_cluster = []
+            for gene_entry in gene_clusters_dict[gene_cluster_name]:
                 sequence = self.genomes_storage.get_gene_sequence(gene_entry['genome_name'], gene_entry['gene_caller_id'])
-                gene_sequences_in_pc.append(('%s_%d' % (gene_entry['genome_name'], gene_entry['gene_caller_id']), sequence),)
+                gene_sequences_in_gene_cluster.append(('%s_%d' % (gene_entry['genome_name'], gene_entry['gene_caller_id']), sequence),)
 
             # alignment
-            alignments = muscle.run_muscle_stdin(gene_sequences_in_pc)
+            if self.debug:
+                self.run.info_single('Aligning sequences in Gene Cluster %s' % gene_cluster_name, nl_before=2, nl_after=1)
+                print(json.dumps(gene_sequences_in_gene_cluster, indent=2))
 
-            for gene_entry in protein_clusters_dict[pc_name]:
+            alignments = self.aligner(run=r).run_stdin(gene_sequences_in_gene_cluster)
+
+            for gene_entry in gene_clusters_dict[gene_cluster_name]:
                 gene_entry['alignment_summary'] = utils.summarize_alignment(alignments['%s_%d' % (gene_entry['genome_name'], gene_entry['gene_caller_id'])])
 
         self.progress.end()
 
-        return protein_clusters_dict
+        return gene_clusters_dict
 
 
     def process(self):
+        # load genomes from genomes storage
+        self.load_genomes()
+
         # check sanity
         self.sanity_check()
 
         # gen pan_db
         self.generate_pan_db()
 
-        # get all protein sequences:
-        combined_proteins_FASTA_path = self.get_output_file_path('combined-proteins.fa')
-        unique_proteins_FASTA_path, unique_proteins_names_dict = self.genomes_storage.gen_combined_protein_sequences_FASTA(combined_proteins_FASTA_path, exclude_partial_gene_calls=self.exclude_partial_gene_calls)
+        # get all amino acid sequences:
+        combined_aas_FASTA_path = self.get_output_file_path('combined-aas.fa')
+        self.genomes_storage.gen_combined_aa_sequences_FASTA(combined_aas_FASTA_path,
+                                                             exclude_partial_gene_calls=self.exclude_partial_gene_calls)
+
+
+        # get unique amino acid sequences:
+        self.progress.new('Uniquing the output FASTA file')
+        self.progress.update('...')
+        unique_aas_FASTA_path, unique_aas_names_file_path, unique_aas_names_dict = utils.unique_FASTA_file(combined_aas_FASTA_path, store_frequencies_in_deflines=False)
+        self.progress.end()
+        self.run.info('Unique AA sequences FASTA', unique_aas_FASTA_path)
 
         # run search
-        blastall_results = self.run_search(unique_proteins_FASTA_path, unique_proteins_names_dict)
+        blastall_results = self.run_search(unique_aas_FASTA_path, unique_aas_names_dict)
 
         # generate MCL input from filtered blastall_results
         mcl_input_file_path = self.gen_mcl_input(blastall_results)
@@ -710,24 +747,27 @@ class Pangenome(GenomeStorage):
         # get clusters from MCL
         mcl_clusters = self.run_mcl(mcl_input_file_path)
 
-        # we have the raw protein clusters dict, but we need to re-format it for following steps
-        protein_clusters_dict = self.gen_protein_clusters_dict_from_mcl_clusters(mcl_clusters)
+        # we have the raw gene clusters dict, but we need to re-format it for following steps
+        gene_clusters_dict = self.gen_gene_clusters_dict_from_mcl_clusters(mcl_clusters)
         del mcl_clusters
 
-        # compute alignments for genes within each PC (or don't)
-        protein_clusters_dict = self.compute_alignments_for_PCs(protein_clusters_dict)
+        # compute alignments for genes within each gene_cluster (or don't)
+        gene_clusters_dict = self.compute_alignments_for_gene_clusters(gene_clusters_dict)
 
         # populate the pan db with results
-        protein_clusters_dict = self.process_protein_clusters(protein_clusters_dict)
+        gene_clusters_dict = self.process_gene_clusters(gene_clusters_dict)
 
-        # store protein clusters dict into the db
-        self.store_protein_clusters(protein_clusters_dict)
+        # store gene clusters dict into the db
+        self.store_gene_clusters(gene_clusters_dict)
 
-        # generate a hierarchical clustering of protein clusters (or don't)
-        self.cluster_protein_clusters()
+        # generate a hierarchical clustering of gene clusters (or don't)
+        self.gen_hierarchical_clustering_of_gene_clusters()
 
-        # gen samples info and order files
-        self.gen_samples_db()
+        # generate orderings of gene_clusters based on synteny of genes
+        self.gen_synteny_based_ordering_of_gene_clusters(gene_clusters_dict)
+
+        # populate layers additional data and orders
+        self.populate_layers_additional_data_and_orders()
 
         # done
         self.run.info('log file', self.run.log_file_path)

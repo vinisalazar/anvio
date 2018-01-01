@@ -21,8 +21,19 @@ column -t $output_dir/contigs-reformat-report.txt
 # we first generate an empty contigs database using contigs.fa (keep in mind that 'contigs.fa'
 # is the original file all samples were mapped to). here we use split size of 1000 (the default split
 # size is much better for most projects. the small split size used here is simply for testing purposes)
-INFO "Generating an EMPTY contigs database"
-anvi-gen-contigs-database -f $files/contigs.fa -o $output_dir/CONTIGS.db -L 1000
+INFO "Generating a new contigs database with external gene calls"
+anvi-gen-contigs-database -f $files/contigs.fa \
+                          -o $output_dir/CONTIGS.db \
+                          -L 1000 \
+                          --external-gene-calls $files/example_external_gene_calls.txt \
+                          --project-name 'Contigs DB with external gene calls'
+rm -rf $output_dir/CONTIGS.db
+
+INFO "Generating a new contigs database with the default gene caller"
+anvi-gen-contigs-database -f $files/contigs.fa \
+                          -o $output_dir/CONTIGS.db \
+                          -L 1000 \
+                          --project-name "Contigs DB for anvi'o self-tests"
 
 INFO "Exporting gene calls from the contigs database"
 anvi-export-gene-calls -c $output_dir/CONTIGS.db -o $output_dir/exported_gene_calls.txt
@@ -45,6 +56,12 @@ anvi-run-hmms -c $output_dir/CONTIGS.db -H $files/external_hmm_profile
 INFO "Rerunning HMMs for a specific installed profile"
 anvi-run-hmms -c $output_dir/CONTIGS.db -I Ribosomal_RNAs
 
+INFO "Export genomic locus using HMM"
+anvi-export-locus -c $output_dir/CONTIGS.db -O $output_dir/exported_locus_from_hmm -n 200,2 -s S-AdoMet_synt_C --use-hmm --hmm-sources Campbell_et_al
+
+INFO "Recovering completeness esimates for the contigs db"
+anvi-compute-completeness -c $output_dir/CONTIGS.db
+
 INFO "Importing gene function calls using 'interproscan' parser"
 anvi-import-functions -c $output_dir/CONTIGS.db -i $files/example_interpro_output.tsv -p interproscan
 
@@ -61,6 +78,9 @@ INFO "Export all functional annotations"
 anvi-export-functions -c $output_dir/CONTIGS.db -o $output_dir/exported_functions_from_all_sources.txt
 echo
 head $output_dir/exported_functions_from_all_sources.txt | tr ' ' @@ | column -t | tr @@ ' '
+
+INFO "Export genomic locus using functional annotation search"
+anvi-export-locus -c $output_dir/CONTIGS.db -O $output_dir/exported_locus_from_functions -n 2,200 -s NusB
 
 INFO "Export only Pfam annotations"
 anvi-export-functions -c $output_dir/CONTIGS.db -o $output_dir/exported_functions_from_source_Pfam.txt --annotation-sources Pfam
@@ -90,10 +110,16 @@ done
 
 
 INFO "Merging profiles"
-anvi-merge $output_dir/*/*.db -o $output_dir/SAMPLES-MERGED -c $output_dir/CONTIGS.db --description $files/example_description.md
+anvi-merge $output_dir/*/PROFILE.db -o $output_dir/SAMPLES-MERGED -c $output_dir/CONTIGS.db --description $files/example_description.md
+
+INFO "Merging profiles without any clustering"
+anvi-merge $output_dir/*/PROFILE.db -o $output_dir/SAMPLES-MERGED-WO-CLUSTERING \
+                              -c $output_dir/CONTIGS.db \
+                              --skip-concoct-binning \
+                              --skip-hierarchical-clustering
 
 INFO "Update the description in the merged profile"
-anvi-update-db-description -p $output_dir/SAMPLES-MERGED/PROFILE.db --description $files/example_description.md
+anvi-update-db-description $output_dir/SAMPLES-MERGED/PROFILE.db --description $files/example_description.md
 
 INFO "Generating coverages and sequences files for splits (for external binning)"
 anvi-export-splits-and-coverages -c $output_dir/CONTIGS.db -p $output_dir/SAMPLES-MERGED/PROFILE.db
@@ -101,7 +127,7 @@ anvi-export-splits-and-coverages -c $output_dir/CONTIGS.db -p $output_dir/SAMPLE
 INFO "Generating per-nt position coverage values for a single split across samples"
 anvi-get-split-coverages -p $output_dir/SAMPLES-MERGED/PROFILE.db -o $output_dir/contig_1720_split_00001_coverages.txt --split-name 204_10M_MERGED.PERFECT.gz.keep_contig_1720_split_00001
 
-INFO "Generating per-nt position coverage values for a splits in a bin across samples"
+INFO "Generating per-nt position coverage values for splits in a bin across samples"
 anvi-get-split-coverages -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -o $output_dir/split_coverages_in_Bin_1.txt -C CONCOCT -b Bin_1
 
 INFO "Cluster contigs in the newly generated coverages file"
@@ -122,11 +148,8 @@ anvi-experimental-organization $files/example_clustering_configuration.ini -i $o
 INFO "Use anvi-experimental-organization to generate a tree from a non-default configuration, but overwrite linkage method and distance metric"
 anvi-experimental-organization $files/example_clustering_configuration.ini -i $output_dir/SAMPLES-MERGED -c $output_dir/CONTIGS.db -p $output_dir/SAMPLES-MERGED/PROFILE.db --name experimental --distance canberra --linkage complete
 
-INFO "Importing external binning results for splits into the contigs database as 'SPLITS_IMPORTED_INTO_CONTIGS_DB'"
-anvi-import-collection $files/example_files_for_external_binning_results/external_binning_of_splits.txt \
-                       -c $output_dir/CONTIGS.db \
-                       --collection-name 'SPLITS_IMPORTED_INTO_CONTIGS_DB' \
-                       --bins-info $files/example_files_for_external_binning_results/example_bins_info_file.txt
+INFO "Adding a 'DEFAULT' collection that describes all splits in an 'EVERYTHING' bin to the merged profile"
+anvi-script-add-default-collection -p $output_dir/SAMPLES-MERGED/PROFILE.db
 
 INFO "Importing external binning results for splits into the profile database as 'SPLITS_IMPORTED'"
 anvi-import-collection $files/example_files_for_external_binning_results/external_binning_of_splits.txt \
@@ -142,6 +165,12 @@ anvi-import-collection $files/example_files_for_external_binning_results/externa
                        --collection-name 'CONTIGS_IMPORTED' \
                        --bins-info $files/example_files_for_external_binning_results/example_bins_info_file.txt \
                        --contigs-mode
+
+INFO "Merging Bin_2 and Bin_3 into a new bin in the collection 'CONTIGS_IMPORTED'"
+anvi-merge-bins -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                --collection-name 'CONTIGS_IMPORTED' \
+                --bin-names-list Bin_2,Bin_3 \
+                --new-bin-name merged_bins
 
 INFO "Exporting the 'CONTIGS_IMPORTED' collection that was just imported"
 anvi-export-collection -p $output_dir/SAMPLES-MERGED/PROFILE.db -C CONTIGS_IMPORTED --output-file-prefix $output_dir/exported-collection
@@ -195,10 +224,26 @@ anvi-gen-variability-profile -c $output_dir/CONTIGS.db \
                              -o $output_dir/variability_PSAMPLES_Bin_00001_ALT.txt
 
 INFO "Generate an AA variabilty profile for PSAMPLES_Bin_00001 using a collection id"
-anvi-gen-variability-profile -c $output_dir/CONTIGS.db -p $output_dir/SAMPLES-MERGED/PROFILE.db -C cmdline_concoct_RENAMED -b PSAMPLES_Bin_00001 -o $output_dir/variability_AA_PSAMPLES_Bin_00001.txt --quince-mode --engine AA
+anvi-gen-variability-profile -c $output_dir/CONTIGS.db \
+                             -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                             -C cmdline_concoct_RENAMED \
+                             -b PSAMPLES_Bin_00001 \
+                             -o $output_dir/variability_AA_PSAMPLES_Bin_00001.txt \
+                             --quince-mode \
+                             --engine AA
 
 INFO "Generating amino acid frequencies for gene caller id 3 in SAMPLE-01.bam"
-anvi-get-aa-frequencies -i $output_dir/SAMPLE-01.bam -c $output_dir/CONTIGS.db --gene-caller-id 3 -o $output_dir/AA_frequencies_for_gene_caller_id_3.txt
+anvi-get-aa-frequencies -i $output_dir/SAMPLE-01.bam \
+                        -c $output_dir/CONTIGS.db \
+                        --gene-caller-id 3 \
+                        -o $output_dir/AA_frequencies_for_gene_caller_id_3.txt
+
+INFO "Generating amino codon frequencies for gene caller id 3 in SAMPLE-01.bam"
+anvi-get-aa-frequencies -i $output_dir/SAMPLE-01.bam \
+                        -c $output_dir/CONTIGS.db \
+                        --gene-caller-id 3 \
+                        -o $output_dir/CODON_frequencies_for_gene_caller_id_3.txt \
+                        --return-codon-frequencies-instead
 
 INFO "Getting back the sequence for gene call 3"
 anvi-get-dna-sequences-for-gene-calls -c $output_dir/CONTIGS.db --gene-caller-ids 3 -o $output_dir/Sequence_for_gene_caller_id_3.fa
@@ -224,18 +269,15 @@ anvi-get-sequences-for-hmm-hits -c $output_dir/CONTIGS.db -o $output_dir/ABC_tra
 INFO "Get AA sequences for HMM hits for a bin in a collection"
 anvi-get-sequences-for-hmm-hits -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -C CONCOCT -b Bin_1 -o $output_dir/hmm_hits_sequences_in_Bin_1.txt --get-aa-sequences
 
-INFO "Generate a new samples information database with a single newick order"
-anvi-gen-samples-info-database --single-order $files/samples-single-order-newick.txt -n A_BASIC_ORDER -o $output_dir/SAMPLES.db
-rm $output_dir/SAMPLES.db
+INFO "Import layer additional data from file"
+anvi-import-misc-data $files/samples-information.txt \
+                      -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                      --target-data-table layers
 
-INFO "Generate a samples information database with samples information and samples order"
-anvi-gen-samples-info-database -D $files/samples-information.txt -R $files/samples-order.txt -o $output_dir/SAMPLES.db
-
-INFO "Update an existing samples database with a basic order"
-anvi-update-samples-info-database -s $output_dir/SAMPLES.db --single-order $files/samples-single-order-basic.txt -n ADDITIONAL_BASIC_ORDER
-
-INFO "Update an existing samples database with a newick tree order"
-anvi-update-samples-info-database -s $output_dir/SAMPLES.db --single-order $files/samples-single-order-newick.txt -n ADDITIONAL_NEWICK_ORDER
+INFO "Import layer orders from file"
+anvi-import-misc-data $files/samples-order.txt \
+                      -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                      --target-data-table layer_orders
 
 INFO "Get linkmers from all BAM files for some distant positions"
 anvi-report-linkmers --contigs-and-positions $files/distant_positions_for_linkmers.txt -i $output_dir/*.bam -o $output_dir/distant_linkmers.txt
@@ -274,6 +316,7 @@ column -t $output_dir/aa_counts_for_five_genes.txt
 
 INFO "Importing a state file into the merged profile"
 anvi-import-state -p $output_dir/SAMPLES-MERGED/PROFILE.db --state $files/example_state.json --name default
+anvi-import-state -p $output_dir/SAMPLES-MERGED-WO-CLUSTERING/PROFILE.db --state $files/example_state.json --name default
 
 INFO "Exporting the state named 'default' from the merged profile"
 anvi-export-state -p $output_dir/SAMPLES-MERGED/PROFILE.db --state default -o $output_dir/SAMPLES-MERGED/default_state.json
@@ -287,10 +330,34 @@ anvi-split -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -C
 INFO "Listing all collections and bins available in the merged profile"
 anvi-show-collections-and-bins -p $output_dir/SAMPLES-MERGED/PROFILE.db
 
+INFO "Running anvi-mcg-classifier"
+mkdir -p $output_dir/MCG_CLASSIFIER_OUTPUTS
+anvi-mcg-classifier -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -O $output_dir/MCG_CLASSIFIER_OUTPUTS/MCG
+
+INFO "Running anvi-mcg-classifier including only SAMPLE-01 and SAMPLE-02"
+anvi-mcg-classifier -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -O $output_dir/MCG_CLASSIFIER_OUTPUTS/MCG_INCLUDE --include-samples $files/samples_to_include_for_mcg.txt
+
+INFO "Running anvi-mcg-classifier excluding SAMPLE-01"
+anvi-mcg-classifier -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -O $output_dir/MCG_CLASSIFIER_OUTPUTS/MCG_EXCLUDE --exclude-samples $files/samples_to_exclude_for_mcg.txt
+
+INFO "Running anvi-mcg-classifier on a collection"
+anvi-mcg-classifier -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -O $output_dir/MCG_CLASSIFIER_OUTPUTS/MCG_CONCOCT -C CONCOCT
+
+INFO "Running anvi-mcg-classifier on a single bin in a collection"
+anvi-mcg-classifier -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -O $output_dir/MCG_CLASSIFIER_OUTPUTS/MCG_Bin_1 -C CONCOCT -b Bin_1
+
+INFO 'A dry run with an items order file for the merged profile without any clustering'
+anvi-interactive -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                 -c $output_dir/CONTIGS.db \
+                 --items-order $files/example_items_order_file.txt \
+                 --dry-run
+
+INFO "Firing up the interactive interface to display the contigs db stats"
+anvi-display-contigs-stats $output_dir/CONTIGS.db
+
 INFO "Firing up the interactive interface for merged samples"
 anvi-interactive -p $output_dir/SAMPLES-MERGED/PROFILE.db \
                  -c $output_dir/CONTIGS.db \
-                 -s $output_dir/SAMPLES.db \
                  -A $files/additional_view_data.txt \
                  -t $output_dir/SAMPLES-MERGED/EXP-ORG-FILE.txt \
                  -V $files/additional_view.txt \
@@ -306,4 +373,4 @@ INFO "Firing up the interactive interface in 'COLLECTION' mode"
 anvi-interactive -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -C CONCOCT
 
 INFO "Firing up the interactive interface to refine a bin"
-anvi-refine -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -s $output_dir/SAMPLES.db -C CONCOCT -b Bin_1
+anvi-refine -p $output_dir/SAMPLES-MERGED/PROFILE.db -c $output_dir/CONTIGS.db -C CONCOCT -b Bin_1

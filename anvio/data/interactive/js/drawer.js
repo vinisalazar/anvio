@@ -65,6 +65,14 @@ Drawer.prototype.iterate_layers = function(callback) {
 Drawer.prototype.draw = function() {
     this.initialize_screen();
 
+    if (parseFloat(this.settings['angle-min']) <= 0) {
+        this.settings['angle-min'] = 0;
+    }
+
+    if (parseFloat(this.settings['angle-max']) >= 360) {
+        this.settings['angle-max'] = 359.9999999;
+    } 
+
     id_to_node_map = new Array();
     label_to_node_map = {};
     order_to_node_map = new Array();
@@ -114,14 +122,18 @@ Drawer.prototype.draw = function() {
     // Scale to fit window
     bbox = svg.getBBox();
     zoom_reset();
+    this.show_drawing_statistics();
 
     // pan and mouse zoom
-    $('svg').svgPan('viewport');
+    $('svg').svgPan(
+        {
+            'viewportId': 'viewport', 
+            'onlyPanOnMouseUp': (this.total_object_count > 10000 || order_to_node_map.length > 5000),
+        });
 
     this.bind_tree_events();
     initialize_area_zoom(); // area-zoom.js
     this.update_title_panel();
-    this.show_drawing_statistics();
     
     ANIMATIONS_ENABLED = false;
 };
@@ -364,7 +376,6 @@ Drawer.prototype.initialize_tree = function() {
             return;
         }
         this.tree.ComputeDepths();
-        this.tree.ComputeWeights(this.tree.root);
 
         var n = new NodeIterator(this.tree.root);
         var q = n.Begin();
@@ -1033,7 +1044,7 @@ Drawer.prototype.calculate_layer_boundaries = function() {
 
         var ending_of_previous_layer = this.layer_boundaries[layer.order - 1][1];
 
-        var layer_start = ending_of_previous_layer + margin;
+        var layer_start = ending_of_previous_layer + ((height > 0) ? margin : 0);
         var layer_end   = layer_start + height;
 
         this.layer_boundaries.push([layer_start, layer_end]);
@@ -1117,8 +1128,14 @@ Drawer.prototype.draw_layer_backgrounds = function() {
             _opacity = parseFloat(this.settings['background-opacity']);
         }
 
+        if (layer.is_stackbar) {
+            var _colors = stack_bar_colors[layer.index]; 
+            _bgcolor = _colors[_colors.length-1];
+            _opacity = 1;
+        }
+
         // draw backgrounds
-        if (this.settings['tree-type']=='phylogram' && ((layer.is_numerical && layer.get_visual_attribute('type') == 'bar') || (layer.is_categorical && layer.get_visual_attribute('type') == 'text')))
+        if (this.settings['tree-type']=='phylogram' && ((layer.is_numerical && layer.get_visual_attribute('type') == 'bar') || (layer.is_categorical && layer.get_visual_attribute('type') == 'text') || layer.is_stackbar))
         {
             drawPhylogramRectangle('layer_background_' + layer.order,
                 'all',
@@ -1132,7 +1149,7 @@ Drawer.prototype.draw_layer_backgrounds = function() {
         }
 
 
-        if (this.settings['tree-type'] == 'circlephylogram' && ((layer.is_numerical && layer.get_visual_attribute('type') == 'bar') || (layer.is_categorical && layer.get_visual_attribute('type') == 'text')))
+        if (this.settings['tree-type'] == 'circlephylogram' && ((layer.is_numerical && layer.get_visual_attribute('type') == 'bar') || (layer.is_categorical && layer.get_visual_attribute('type') == 'text') || layer.is_stackbar))
         {
             var _first = order_to_node_map[0];
             var _last = order_to_node_map[order_to_node_map.length - 1];
@@ -1155,15 +1172,20 @@ Drawer.prototype.draw_guide_lines = function() {
     if (!this.has_tree)
         return;
 
+    if (this.settings['draw-guide-lines'] == 'no')
+        return;
+
     var beginning_of_layers = this.layer_boundaries[0][1];
-    var odd_even_flag = -1;
+    var odd_even_flag = 1;
 
     var n = new NodeIterator(this.tree.root);
     var q = n.Begin();
 
     while (q != null) {
         if (q.IsLeaf() && !q.collapsed) {
-            odd_even_flag = odd_even_flag * -1;
+            if (this.settings['draw-guide-lines'] == 'odd_even') {
+                odd_even_flag = odd_even_flag * -1;
+            }
             if (odd_even_flag > 0) {
                 if (this.settings['tree-type'] == 'phylogram') {
                     drawStraightGuideLine('guide_lines', q.id, q.xy, beginning_of_layers);
@@ -1187,6 +1209,8 @@ Drawer.prototype.draw_numerical_layers = function() {
 
         var numeric_cache = [];
 
+        var previous_non_zero_order = 0;
+
         for (var i=0; i < order_to_node_map.length; i++) {
             q = order_to_node_map[i];
 
@@ -1208,31 +1232,45 @@ Drawer.prototype.draw_numerical_layers = function() {
                 }
                 else
                 {
-                    if (this.settings['optimize-speed']) {
-                        if (numeric_cache.length == 0)
+                    if (this.settings['optimize-speed'] || layer.get_visual_attribute('type') == 'line') {
+                        if (this.layerdata_dict[q.label][layer.index] > 0)
                         {
-                            numeric_cache.push(
-                                "M",
-                                this.layer_boundaries[layer.order][1], 
-                                q.xy['y'] - q.size / 2
-                                );
-                        }
+                            if (q.order == 0 || (q.order > 0 && this.layerdata_dict[order_to_node_map[i-1].label][layer.index] == 0)) {
+                                numeric_cache.push(
+                                    "M", 
+                                    this.layer_boundaries[layer.order][1], 
+                                    q.xy['y'] - q.size / 2
+                                    );
+                            }
 
-                        numeric_cache.push(
-                            "L", 
-                            this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index], 
-                            q.xy['y'] - q.size / 2, 
-                            "L", 
-                            this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index], 
-                            q.xy['y'] + q.size / 2
-                            );
+                            if (layer.get_visual_attribute('type') == 'line')
+                            {
+                                numeric_cache.push(
+                                    "L", 
+                                    this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index], 
+                                    q.xy['y']
+                                    );
+                            }
+                            else
+                            {
+                                numeric_cache.push(
+                                    "L", 
+                                    this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index], 
+                                    q.xy['y'] - q.size / 2, 
+                                    "L", 
+                                    this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index], 
+                                    q.xy['y'] + q.size / 2
+                                    );
+                            }
 
-                        if (q.order == order_to_node_map.length - 1) {
-                            numeric_cache.push(
-                                "L", 
-                                this.layer_boundaries[layer.order][1], 
-                                q.xy['y'] + q.size / 2,
-                                "Z");
+                            if ((q.order == order_to_node_map.length - 1) || (q.order < (order_to_node_map.length - 1) && this.layerdata_dict[order_to_node_map[i+1].label][layer.index] == 0)) {
+                                numeric_cache.push(
+                                    "L", 
+                                    this.layer_boundaries[layer.order][1], 
+                                    q.xy['y'] + q.size / 2,
+                                    "Z"
+                                    );
+                            }
                         }
                     }
                     else
@@ -1244,7 +1282,7 @@ Drawer.prototype.draw_numerical_layers = function() {
                                 q.xy['y'],
                                 q.size,
                                 this.layerdata_dict[q.label][layer.index],
-                                color,
+                                layer.get_visual_attribute('color'),
                                 1,
                                 false);
                         }
@@ -1271,39 +1309,52 @@ Drawer.prototype.draw_numerical_layers = function() {
                 }
                 else
                 {
-                    if (this.settings['optimize-speed']) {
+                    if (this.settings['optimize-speed'] || layer.get_visual_attribute('type') == 'line') {
                         var start_angle  = q.angle - q.size / 2;
                         var end_angle    = q.angle + q.size / 2;
                         var inner_radius = this.layer_boundaries[layer.order][0];
                         var outer_radius = this.layer_boundaries[layer.order][0] + this.layerdata_dict[q.label][layer.index];
 
-                        if (numeric_cache.length == 0)
-                        {
-                            var ax = Math.cos(start_angle) * inner_radius;
-                            var ay = Math.sin(start_angle) * inner_radius;
+                        if (this.layerdata_dict[q.label][layer.index] > 0) {
+                            if (q.order == 0 || this.layerdata_dict[order_to_node_map[i-1].label][layer.index] == 0)
+                            {
+                                var ax = Math.cos(start_angle) * inner_radius;
+                                var ay = Math.sin(start_angle) * inner_radius;
 
-                            numeric_cache.push("M", ax, ay);
-                        }
+                                numeric_cache.push("M", ax, ay);
+                                previous_non_zero_order = q.order; 
+                            }
 
-                        var cx = Math.cos(end_angle) * outer_radius;
-                        var cy = Math.sin(end_angle) * outer_radius;
+                            if (layer.get_visual_attribute('type') == 'line') {
+                                var bx = Math.cos(q.angle) * outer_radius;
+                                var by = Math.sin(q.angle) * outer_radius;
 
-                        var dx = Math.cos(start_angle) * outer_radius;
-                        var dy = Math.sin(start_angle) * outer_radius;
+                                numeric_cache.push("L", bx, by);
+                            }
+                            else
+                            {
+                                var bx = Math.cos(start_angle) * outer_radius;
+                                var by = Math.sin(start_angle) * outer_radius;
 
-                        numeric_cache.push("L", dx, dy, "A", outer_radius, outer_radius, 0, 0, 1, cx, cy);
+                                var cx = Math.cos(end_angle) * outer_radius;
+                                var cy = Math.sin(end_angle) * outer_radius;
+                                
+                                numeric_cache.push("L", bx, by, "A", outer_radius, outer_radius, 0, is_large_angle(start_angle, end_angle), 1, cx, cy);
+                            }
 
-                        if (q.order == order_to_node_map.length - 1) {
-                            var bx = Math.cos(end_angle) * inner_radius;
-                            var by = Math.sin(end_angle) * inner_radius;
+                            if ((q.order == order_to_node_map.length - 1) || this.layerdata_dict[order_to_node_map[i+1].label][layer.index] == 0) {
+                                var dx = Math.cos(end_angle) * inner_radius;
+                                var dy = Math.sin(end_angle) * inner_radius;
 
-                            var _min = Math.toRadians(this.settings['angle-min']);
-                            var _max = Math.toRadians(this.settings['angle-max']);
-                            var large_arc_flag = (_max - _min > Math.PI) ? 1:0;
+                                numeric_cache.push("L", dx, dy);
+                                var first_node = order_to_node_map[previous_non_zero_order];
+                                var first_node_start_angle = first_node.angle - first_node.size / 2;
 
-                            numeric_cache.push("L", bx, by, 
-                                "A", inner_radius, inner_radius, 0, large_arc_flag, 0, numeric_cache[1], numeric_cache[2], 
-                                "Z");
+                                var ex = Math.cos(first_node_start_angle) * inner_radius;
+                                var ey = Math.sin(first_node_start_angle) * inner_radius;
+                                
+                                numeric_cache.push("A", inner_radius, inner_radius, 1, is_large_angle(end_angle, first_node_start_angle), 0, ex, ey, "Z");
+                            }
                         }
                     }
                     else
@@ -1327,10 +1378,20 @@ Drawer.prototype.draw_numerical_layers = function() {
 
         if (numeric_cache.length > 0) {
             var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            path.setAttribute('stroke-width', '0');
             path.setAttribute('shape-rendering', 'auto');
             path.setAttribute('pointer-events', 'none');
-            path.setAttribute('fill', layer.get_visual_attribute('color'));
+
+            if (layer.get_visual_attribute('type') == 'line') {
+                path.setAttribute('stroke', layer.get_visual_attribute('color'));
+                path.setAttribute('stroke-width', '1px');  
+                path.setAttribute('vector-effect', 'non-scaling-stroke');
+                path.setAttribute('fill', layer.get_visual_attribute('color-start'));     
+            }
+            else {
+                path.setAttribute('fill', layer.get_visual_attribute('color'));
+                path.setAttribute('stroke-width', '0');
+            }
+
             path.setAttribute('d', numeric_cache.join(' '));
             var layer_group = document.getElementById('layer_' + layer.order);
             layer_group.appendChild(path);
@@ -1347,6 +1408,8 @@ Drawer.prototype.draw_stack_bar_layers = function() {
         if (!layer.is_stackbar)
             return;
 
+        var path_cache = [];
+
         for (var i=0; i < order_to_node_map.length; i++) {
             q = order_to_node_map[i];
 
@@ -1354,35 +1417,89 @@ Drawer.prototype.draw_stack_bar_layers = function() {
                 continue;
 
             var offset = 0;
-            for (var j=0; j < this.layerdata_dict[q.label][layer.index].length; j++)
+            for (var j=0; j < this.layerdata_dict[q.label][layer.index].length - 1; j++)
             {
                 if (this.settings['tree-type'] == 'phylogram') {
-                    drawPhylogramRectangle('layer_' + layer.order,
-                        q.id,
-                        this.layer_boundaries[layer.order][1] - offset - this.layerdata_dict[q.label][layer.index][j],
-                        q.xy['y'],
-                        q.size,
-                        this.layerdata_dict[q.label][layer.index][j],
-                        stack_bar_colors[layer.index][j],
-                        1,
-                        false);
+                    if (q.order == 0) {
+                        path_cache[j] = [];
+                        path_cache[j].push(
+                            "M",
+                            this.layer_boundaries[layer.order][1], 
+                            q.xy['y'] - q.size / 2
+                            );
+                    }
+
+                    path_cache[j].push(
+                        "L", 
+                        this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index][j] - offset, 
+                        q.xy['y'] - q.size / 2, 
+                        "L", 
+                        this.layer_boundaries[layer.order][1] - this.layerdata_dict[q.label][layer.index][j] - offset, 
+                        q.xy['y'] + q.size / 2
+                        );
+
+                    if (q.order == (order_to_node_map.length - 1)) {
+                        path_cache[j].push(
+                            "L", 
+                            this.layer_boundaries[layer.order][1], 
+                            q.xy['y'] + q.size / 2,
+                            "Z"
+                            );   
+                    }
                 }
                 else
                 {
-                    drawPie('layer_' + layer.order,
-                        q.id,
-                        q.angle - q.size / 2,
-                        q.angle + q.size / 2,
-                        this.layer_boundaries[layer.order][0] + offset,
-                        this.layer_boundaries[layer.order][0] + offset + this.layerdata_dict[q.label][layer.index][j],
-                        0,
-                        stack_bar_colors[layer.index][j],
-                        1,
-                        false);
+                    var start_angle  = q.angle - q.size / 2;
+                    var end_angle    = q.angle + q.size / 2;
+                    var inner_radius = this.layer_boundaries[layer.order][0];
+                    var outer_radius = this.layer_boundaries[layer.order][0] + this.layerdata_dict[q.label][layer.index][j] + offset;
+
+                    if (q.order == 0)
+                    {
+                        path_cache[j] = [];
+
+                        var ax = Math.cos(start_angle) * inner_radius;
+                        var ay = Math.sin(start_angle) * inner_radius;
+
+                        path_cache[j].push("M", ax, ay); 
+                    }
+
+                    var bx = Math.cos(start_angle) * outer_radius;
+                    var by = Math.sin(start_angle) * outer_radius;
+
+                    var cx = Math.cos(end_angle) * outer_radius;
+                    var cy = Math.sin(end_angle) * outer_radius;
+
+                    path_cache[j].push("L", bx, by, "A", outer_radius, outer_radius, 0, is_large_angle(start_angle, end_angle), 1, cx, cy);
+
+                    if (q.order == order_to_node_map.length - 1) {
+                        var bx = Math.cos(end_angle) * inner_radius;
+                        var by = Math.sin(end_angle) * inner_radius;
+
+                        var _min = Math.toRadians(this.settings['angle-min']);
+                        var _max = Math.toRadians(this.settings['angle-max']);
+
+                        path_cache[j].push("L", bx, by, 
+                            "A", inner_radius, inner_radius, 0, is_large_angle(_min, _max), 0, path_cache[j][1], path_cache[j][2], 
+                            "Z");
+                    }
                 }
                 
                 offset += this.layerdata_dict[q.label][layer.index][j];
             }
+        }
+
+        for (var j = path_cache.length - 1; j >= 0; j--) {
+            var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+
+            path.setAttribute('shape-rendering', 'auto');
+            path.setAttribute('pointer-events', 'none');
+            path.setAttribute('fill', stack_bar_colors[layer.index][j]);
+            path.setAttribute('stroke-width', '0');
+            path.setAttribute('d', path_cache[j].join(' '));
+
+            var layer_group = document.getElementById('layer_' + layer.order);
+            layer_group.appendChild(path); 
         }
     }.bind(this));
 };
@@ -1411,6 +1528,9 @@ Drawer.prototype.draw_layer_names = function() {
 
         if (this.settings['tree-type'] == 'circlephylogram')
         {
+            if (parseFloat(this.settings['angle-max']) > 315)
+                return;
+
             var angle_max = Math.toRadians(parseFloat(this.settings['angle-max']));
             var distance = this.layer_boundaries[layer.order][0] + (height / 2) - (font_size * 1/3);
 
@@ -1469,12 +1589,12 @@ Drawer.prototype.update_title_panel = function() {
 };
 
 Drawer.prototype.show_drawing_statistics = function() {
-    var tree_object_count = document.getElementById('tree').getElementsByTagName('*').length + document.getElementById('guide_lines').getElementsByTagName('*').length;
-    var total_object_count = document.getElementById('svg').getElementsByTagName('*').length;
+    this.tree_object_count = document.getElementById('tree').getElementsByTagName('*').length + document.getElementById('guide_lines').getElementsByTagName('*').length;
+    this.total_object_count = document.getElementById('svg').getElementsByTagName('*').length;
 
-    $('#draw_delta_time').html(order_to_node_map.length + ' splits and ' + total_object_count +' objects drawn in ' + this.timer.getDeltaSeconds('done')['deltaSecondsStart'] + ' seconds.');
+    $('#draw_delta_time').html(order_to_node_map.length + ' splits and ' + this.total_object_count +' objects drawn in ' + this.timer.getDeltaSeconds('done')['deltaSecondsStart'] + ' seconds.');
 
     console.log('[info] Leaf count: ' + order_to_node_map.length);
-    console.log('[info] Object count in tree (with guide lines): ' + tree_object_count);
-    console.log('[info] Total objects in SVG: ' + total_object_count);
+    console.log('[info] Object count in tree (with guide lines): ' + this.tree_object_count);
+    console.log('[info] Total objects in SVG: ' + this.total_object_count);
 };

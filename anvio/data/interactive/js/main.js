@@ -81,7 +81,7 @@ var current_view = '';
 var layer_order;
 
 var completeness_dict = {};
-var PC_bins_summary_dict = {}
+var gene_cluster_bins_summary_dict = {}
 
 var sort_column;
 var sort_order;
@@ -108,8 +108,8 @@ var rotateNode = null;
 
 $(window).resize(function() {
      // get current client size
-    VIEWER_WIDTH = document.getElementById('svg').clientWidth;
-    VIEWER_HEIGHT = document.getElementById('svg').clientHeight;
+    VIEWER_WIDTH = document.getElementById('svg').clientWidth || document.getElementById('svg').width.baseVal.value;
+    VIEWER_HEIGHT = document.getElementById('svg').clientHeight || document.getElementById('svg').height.baseVal.value;
 });
 
 $(document).ready(function() {
@@ -227,7 +227,7 @@ function checkNews() {
                 }
                 $('#news-panel-inner').append('<div class="news-item"> \
                                               <h1>' + ((hash_found) ? '' : '<span class="blue-dot">') + '</span>'+news_item['title']+'</h1> \
-                                              <span class="news-date">'+news_item['date']+'</span>'+marked(news_item['content'])+'</div>')
+                                              <span class="news-date">'+news_item['date']+'</span>'+renderMarkdown(news_item['content'])+'</div>')
             }
             createCookie('news_checked', 'yes', 1); // expiration is 1 days
 
@@ -258,7 +258,7 @@ function initData() {
     function (response)
         {
         var titleResponse = [ response.title ];
-        var clusteringsResponse = [ response.clusterings ];
+        var itemOrdersResponse = [ response.item_orders ];
         var viewsResponse = [ response.views ];
         var contigLengthsResponse = [ response.contigLengths ];
         var defaultViewResponse = [ response.defaultView ];
@@ -287,6 +287,11 @@ function initData() {
         if(!sequencesAvailable && mode != "collection" && mode != "pan"){
             toastr.info("No sequence data is available. Some menu items will be disabled.");
             $('.menuItemSequence').addClass('menu-disabled');
+        }
+
+        if (!response['functions_initialized']) {
+            $('#search_functions_button').attr('disabled', true);
+            $('.functions-not-available-message').show();
         }
 
         if (! response.noPing) {
@@ -320,7 +325,7 @@ function initData() {
                 $('.pan-mode').show();
                 $('.nav-tabs').css('background-image', 'url(images/pan-bg.png)');
 
-                $('#completion_title').attr('title', 'PCs').html('PCs');
+                $('#completion_title').attr('title', 'Gene Clusters').html('Gene Clusters');
                 $('#redundancy_title').attr('title', 'Gene Calls').html('Gene Calls');
                 $('#splits_title').hide();
                 $('#len_title').hide();
@@ -360,14 +365,8 @@ function initData() {
                     $('[data-handler="bootstrap-markdown-cmdPreview"]').trigger('click');
                 },
                 'hiddenButtons': ['cmdUrl', 'cmdImage', 'cmdCode', 'cmdQuote'],
-                'parser': function(val) {
-                    var renderer = new marked.Renderer();
-
-                    renderer.link = function( href, title, text ) {
-                      return '<a target="_blank" href="'+ href +'" title="' + title + '">' + text + '</a>';
-                    }
-
-                    return marked(val, { renderer:renderer });
+                'parser': function(content) {
+                    return renderMarkdown(content);
                 },
                 'additionalButtons': [
                   [{
@@ -411,8 +410,8 @@ function initData() {
             /* 
             //  Clusterings
             */
-            var default_tree = clusteringsResponse[0][0];
-            var available_trees = clusteringsResponse[0][1];
+            var default_tree = itemOrdersResponse[0][0];
+            var available_trees = itemOrdersResponse[0][1];
             var available_trees_combo = getComboBoxContent(default_tree, available_trees);
 
             $('#trees_container').append(available_trees_combo);
@@ -763,7 +762,7 @@ function buildLegendTables() {
         createLegendColorPanel(i); // this fills legend_content_X
     }
 
-    $('#legend_settings').accordion({heightStyle: "content", collapsible: true});
+    $('#legend_settings, #search_tab_content').accordion({heightStyle: "content", collapsible: true});
 
     $('.colorpicker').colpick({
         layout: 'hex',
@@ -1165,7 +1164,7 @@ function buildLayersTable(order, settings)
             }
             else
             {
-                var norm   = getNamedLayerDefaults(layer_name, 'norm', (mode == 'full') ? 'log' : 'none');
+                var norm   = getNamedLayerDefaults(layer_name, 'norm', (mode == 'full' || mode == 'refine') ? 'log' : 'none');
                 var min    = getNamedLayerDefaults(layer_name, 'min', 0);
                 var max    = getNamedLayerDefaults(layer_name, 'max', 0);
                 var min_disabled = getNamedLayerDefaults(layer_name, 'min_disabled', true);
@@ -1202,6 +1201,7 @@ function buildLayersTable(order, settings)
                 '    <select id="type{id}" style="width: 50px;" class="type" onChange="togglePickerStart(this);">' +
                 '        <option value="bar"{option-type-bar}>Bar</option>' +
                 '        <option value="intensity"{option-type-intensity}>Intensity</option>' +
+                '        <option value="line"{option-type-line}>Line</option>' +
                 '    </select>' +
                 '</td>' +
                 '<td>' +
@@ -1315,6 +1315,7 @@ function serializeSettings(use_layer_names) {
     state['bin-labels-angle'] = $('#bin_labels_angle').val();
     state['background-opacity'] = $('#background_opacity').val();
     state['max-font-size-label'] = $('#max_font_size_label').val();
+    state['draw-guide-lines'] = $('#draw_guide_lines').val();
     
     // sync views object and layers table
     syncViews();
@@ -1435,7 +1436,7 @@ function drawTree() {
                     $('#tree-radius').val(Math.max(VIEWER_HEIGHT, VIEWER_WIDTH));
                 }
 
-                if (autoload_collection !== null)
+                if (autoload_collection !== null && mode !== 'refine')
                 {
                     loadCollection(autoload_collection);
                     autoload_collection = null;
@@ -1557,31 +1558,59 @@ function newBin(id, binState) {
     });
 }
 
-function deleteBin(id) {
-    if (confirm('Are you sure?')) {
-
-        $('#bin_row_' + id).remove();
-        $('#tbody_bins input[type=radio]').last().prop('checked', true);
-        bin_count--;
-
-        for (var i = 0; i < SELECTED[id].length; i++) {
-            var node_id = label_to_node_map[SELECTED[id][i]].id;
-            $("#line" + node_id).css('stroke-width', '1');
-            $("#arc" + node_id).css('stroke-width', '1');
-            $("#line" + node_id).css('stroke', LINE_COLOR);
-            $("#arc" + node_id).css('stroke', LINE_COLOR);
-        }
-
-        SELECTED[id] = [];
-        delete completeness_dict[id];
-
-        if (bin_count==0)
-        {
-            newBin();
-        }
-
-        redrawBins();
+function deleteBin(id, show_confirm) {
+    if (typeof show_confirm === 'undefined') {
+        show_confirm = true;
     }
+
+    if (show_confirm && !confirm('Are you sure?')) {
+        return;
+    }
+
+    $('#bin_row_' + id).remove();
+    $('#tbody_bins input[type=radio]').last().prop('checked', true);
+    bin_count--;
+
+    for (var i = 0; i < SELECTED[id].length; i++) {
+        var node = label_to_node_map[SELECTED[id][i]];
+
+        if (typeof node === 'undefined' || !node.hasOwnProperty('id')) {
+            continue;
+        }
+
+        var node_id = node.id;
+        $("#line" + node_id).css('stroke-width', '1');
+        $("#arc" + node_id).css('stroke-width', '1');
+        $("#line" + node_id).css('stroke', LINE_COLOR);
+        $("#arc" + node_id).css('stroke', LINE_COLOR);
+    }
+
+    SELECTED[id] = [];
+    delete completeness_dict[id];
+
+    if (bin_count==0)
+    {
+        newBin();
+    }
+
+    redrawBins();
+}
+
+function deleteAllBins() {
+    if (!confirm('Are you sure you want to remove all bins?')) {
+        return;
+    }
+    var bin_ids_to_delete = [];
+
+    $('#tbody_bins tr').each(
+        function(index, bin) {
+            bin_ids_to_delete.push($(bin).attr('bin-id'));
+        }
+    );
+
+    bin_ids_to_delete.map(function(bin_id) { 
+        deleteBin(bin_id, false);
+    });
 }
 
 function showGenSummaryWindow() {
@@ -1627,7 +1656,7 @@ function updateBinsWindow(bin_list) {
         var bin_id = bin_list[_i];
 
         if (mode === 'pan'){
-            updateProteinClustersBin(bin_id);
+            updateGeneClustersBin(bin_id);
         } else {
             updateComplateness(bin_id);
 
@@ -1659,20 +1688,20 @@ function updateBinsWindow(bin_list) {
 }
 
 
-function updateProteinClustersBin(bin_id) {
+function updateGeneClustersBin(bin_id) {
     if (mode !== 'pan'){ 
         return;
     }
 
     $.ajax({
         type: "POST",
-        url: "/data/proteinclusterssummary",
+        url: "/data/geneclusterssummary",
         cache: false,
         data: {split_names: JSON.stringify(getContigNames(bin_id)), bin_name: JSON.stringify($('#bin_name_' + bin_id).val())},
         success: function(data){
-            PC_bins_summary_dict[bin_id] = data;
+            gene_cluster_bins_summary_dict[bin_id] = data;
             $('#redundancy_' + bin_id).val(data['num_gene_calls']).parent().attr('data-value', data['num_gene_calls']);
-            $('#completeness_' + bin_id).val(data['num_PCs']).parent().attr('data-value', data['num_PCs']);
+            $('#completeness_' + bin_id).val(data['num_gene_clusters']).parent().attr('data-value', data['num_gene_clusters']);
 
             $('#completeness_' + bin_id).attr("disabled", false);
             $('#redundancy_' + bin_id).attr("disabled", false);
@@ -1699,11 +1728,13 @@ function updateComplateness(bin_id) {
 
             completeness_dict[bin_id] = completeness_info_dict;
 
-            average_completeness = averages['percent_completion']
-            average_redundancy = averages['percent_redundancy']
+            average_completeness = averages['percent_completion'];
+            average_redundancy = averages['percent_redundancy'];
 
-            $('#completeness_' + bin_id).val(average_completeness.toFixed(1) + '%').parent().attr('data-value', average_completeness);
-            $('#redundancy_' + bin_id).val(average_redundancy.toFixed(1) + '%').parent().attr('data-value', average_redundancy);
+            if (average_completeness != null && average_redundancy != null) {
+                $('#completeness_' + bin_id).val(average_completeness.toFixed(1) + '%').parent().attr('data-value', average_completeness);
+                $('#redundancy_' + bin_id).val(average_redundancy.toFixed(1) + '%').parent().attr('data-value', average_redundancy);
+            }
 
             $('#completeness_' + bin_id).attr("disabled", false);
             $('#redundancy_' + bin_id).attr("disabled", false);
@@ -1774,6 +1805,7 @@ function showRedundants(bin_id, updateOnly) {
         tabletext += '<h5>' + source + ' (' + Object.keys(stats[source]['redundants']).length + ')</h5></td></tr>';
 
         var redundants_html = '';
+        var split_array_all = '';
 
         for (var redundant in stats[source]['redundants']) {
             var title = '';
@@ -1787,6 +1819,8 @@ function showRedundants(bin_id, updateOnly) {
                     title += contig[j] + '\n';
                     split_array += '\'' + contig[j] + '\', ';
                 }
+
+                split_array_all += split_array;
             }
 
             redundants_html += '<span style="cursor:pointer;" \
@@ -1796,7 +1830,9 @@ function showRedundants(bin_id, updateOnly) {
                                   </span><br />';
         }
 
-        tabletext += '<tr><td valign="top">' + redundants_html + '</tr></td></table></div>';
+        tabletext += '<tr><td valign="top">' + redundants_html + '<br /><br /><span style="cursor:pointer;" \
+                                    onclick="highlighted_splits = [' + split_array_all + ']; redrawBins();">(Highlight All)\
+                                  </span></tr></td></table></div>';
         output += tabletext;
 
         if (oddeven%2==0)
@@ -1829,7 +1865,7 @@ function exportSvg(dontDownload) {
             };
 
             if (mode == 'pan') {
-                _bin_info['pcs'] = $('#completeness_' + bin_id).val(); 
+                _bin_info['gene_clusters'] = $('#completeness_' + bin_id).val(); 
                 _bin_info['gene-calls'] = $('#redundancy_' + bin_id).val(); 
             } else {
                 _bin_info['contig-length'] = $('#contig_length_' + bin_id).html();
@@ -1943,6 +1979,7 @@ function storeRefinedBins() {
     });
 }
 
+
 function storeCollection() {
     var collection_name = $('#storeCollection_name').val();
 
@@ -1953,9 +1990,25 @@ function storeCollection() {
         $('#storeCollection_name').focus();
         return;
     }
-         
-    data = {};
-    colors = {};
+
+    var collection_info = serializeCollection();
+
+    $.post("/store_collection", {
+        source: collection_name,
+        data: JSON.stringify(collection_info['data'], null, 4),
+        colors: JSON.stringify(collection_info['colors'], null, 4),
+    },
+    function(server_response, status){
+        toastr.info(server_response, "Server");
+    });
+
+    $('#modStoreCollection').modal('hide');    
+}
+
+
+function serializeCollection() {
+    var data = {};
+    var colors = {};
 
     $('#tbody_bins tr').each(
         function(index, bin) {
@@ -1982,17 +2035,9 @@ function storeCollection() {
         }
     );
 
-    $.post("/store_collection", {
-        source: collection_name,
-        data: JSON.stringify(data, null, 4),
-        colors: JSON.stringify(colors, null, 4),
-    },
-    function(server_response, status){
-        toastr.info(server_response, "Server");
-    });
-
-    $('#modStoreCollection').modal('hide');    
+    return {'data': data, 'colors': colors};
 }
+
 
 function generateSummary() {
     var collection = $('#summaryCollection_list').val();
@@ -2213,7 +2258,7 @@ function showSaveStateWindow()
 }
 
 function showGeneratePhylogeneticTreeWindow() {
-    $('#phylogeny_pc').empty();
+    $('#phylogeny_gene_cluster').empty();
     $('#phylogeny_programs').empty();
     $('#modPhylogeneticTree :input').attr("disabled", false);
     $('.generating-tree').hide();
@@ -2222,39 +2267,52 @@ function showGeneratePhylogeneticTreeWindow() {
         cache: false,
         url: '/data/phylogeny/programs?timestamp=' + new Date().getTime(),
         success: function(available_programs) {
-            $('#available_phylogeny_programs').empty();
-            for (var i=0; i < available_programs.length; i++) {
-                if (available_programs[i] == 'default')
-                    continue;
+              $.ajax({
+                type: 'GET',
+                cache: false,
+                url: '/data/phylogeny/aligners?timestamp=' + new Date().getTime(),
+                success: function(available_aligners) {
+                    $('#phylogeny_programs').empty();
+                    for (var i=0; i < available_programs.length; i++) {
+                        if (available_programs[i] == 'default')
+                            continue;
 
-                $('#phylogeny_programs').append(new Option(available_programs[i]))
-            }
+                        $('#phylogeny_programs').append(new Option(available_programs[i]))
+                    }
 
-            $('#tbody_bins tr').each(
-                function(index, bin) {
-                    var bin_id = $(bin).attr('bin-id');
-                    var bin_name = $('#bin_name_' + bin_id).val();
+                    $('#phylogeny_aligners').empty();
+                    for (var i=0; i < available_aligners.length; i++) {
+                        if (available_aligners[i] == 'default')
+                            continue;
 
-                    $('#phylogeny_pc').append('<option value="' + bin_id + '">' + bin_name + '</option>');
-                }
-            );
-            $('#modPhylogeneticTree').modal('show');
-        }
-    });
+                        $('#phylogeny_aligners').append(new Option(available_aligners[i]))
+                    }
+
+                    $('#tbody_bins tr').each(
+                        function(index, bin) {
+                            var bin_id = $(bin).attr('bin-id');
+                            var bin_name = $('#bin_name_' + bin_id).val();
+
+                            $('#phylogeny_gene_cluster').append('<option value="' + bin_id + '">' + bin_name + '</option>');
+                        }
+                    );
+                    $('#modPhylogeneticTree').modal('show');
+                }});
+        }});
 }
 
 function generatePhylogeneticTree() {
     new_phylogeny_name = $('#phylogeny_name').val();
-    pc_list = [];
-    pcs_id = $('#phylogeny_pc').val();
-    for (var i=0; i < SELECTED[pcs_id].length; i++) {
-        if (label_to_node_map[SELECTED[pcs_id][i]].IsLeaf()) {
-            pc_list.push(SELECTED[pcs_id][i]);
+    gene_cluster_list = [];
+    gene_clusters_id = $('#phylogeny_gene_cluster').val();
+    for (var i=0; i < SELECTED[gene_clusters_id].length; i++) {
+        if (label_to_node_map[SELECTED[gene_clusters_id][i]].IsLeaf()) {
+            gene_cluster_list.push(SELECTED[gene_clusters_id][i]);
         } 
     }
 
-    if (pc_list.length == 0) {
-        alert("The Bin you selected does not contain any PCs.");
+    if (gene_cluster_list.length == 0) {
+        alert("The Bin you selected does not contain any gene_clusters.");
         return;
     }
 
@@ -2273,7 +2331,8 @@ function generatePhylogeneticTree() {
             'name': $('#phylogeny_name').val(),
             'skip_multiple_genes': $('#phylogeny_skip_multiple_gene_calls').is(':checked'),
             'program': $('#phylogeny_programs').val(),
-            'pcs': pc_list,
+            'aligner': $('#phylogeny_aligners').val(),
+            'gene_clusters': gene_cluster_list,
             'store_tree': $('#phylogeny_store_generated_tree').is(':checked'),
         },
         success: function(response) {
@@ -2640,6 +2699,9 @@ function loadState()
                             }
                             if (state.hasOwnProperty('background-opacity')) {
                                 $('#background_opacity').val(state['background-opacity']);
+                            }
+                            if (state.hasOwnProperty('draw-guide-lines')) {
+                                $('#draw_guide_lines').val(state['draw-guide-lines'])
                             }
 
                             // reload layers

@@ -505,18 +505,23 @@ div#tooltip_content tr:nth-child(odd) {background: rgba(220,220,220,0.1);}
   color: green;
 }
 
-#search_result_message {
-  padding-left: 100px;
+#search_result_message, #search_result_message_functions {
+  display: inline-block;
   height: 30px;
   padding-top: 7px;
   font-weight: bold;
   font-family: fantasy;
+  font-size: 14px;
 }
 
 #tooltips-table {
   display: block;
   max-width: 100%;
   overflow: scroll;
+}
+
+#search_tab_content td {
+    padding: 6px;
 }
 
 #bins-table > tbody > tr > td { padding: 5px; }
@@ -539,16 +544,6 @@ div#tooltip_content tr:nth-child(odd) {background: rgba(220,220,220,0.1);}
     display: none;
     vertical-align: middle;
     text-align: center;
-}
-
-#divzoom_inner { 
-    pointer-events: none;
-    margin: auto 0px;
-    background-color: rgba(0,0,0,0.2); 
-    position:relative; 
-    top: 50%;
-    left: 50%;
-    transform:translate(-50%,-50%);
 }
 
 #fixed-navbar-div {
@@ -691,4 +686,9 @@ div#tooltip_content tr:nth-child(odd) {background: rgba(220,220,220,0.1);}
 
 .sidebarPadding {
     padding-top: 60px !important;
+}
+
+.modal-body {
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
 }

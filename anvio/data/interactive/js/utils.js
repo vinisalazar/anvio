@@ -24,6 +24,10 @@ function log10(val) {
   return Math.log(val) / Math.LN10;
 }
 
+function is_large_angle(a, b) {
+    return (Math.abs(b - a) > Math.PI) ? 1 : 0;
+}
+
 function fire_up_ncbi_blast(item_name, program, database, target)
 {
     if (["gene", "contig"].indexOf(target) < 0){
@@ -79,7 +83,7 @@ function fire_up_ncbi_blast(item_name, program, database, target)
                 var form = document.createElement('form');
                 
                 form.action = 'https://blast.ncbi.nlm.nih.gov/Blast.cgi';
-                form.method = 'POST';
+                form.method = 'GET';
 
                 for (name in post_variables)
                 {
@@ -104,13 +108,13 @@ function generate_inspect_link(type, item_name) {
             if (type == 'inspect') {
                 return 'charts.html?id=' + item_name;
             } 
-            else if (type == 'proteinclusters') {
-                return 'proteinclusters.html?id=' + item_name;
+            else if (type == 'geneclusters') {
+                return 'geneclusters.html?id=' + item_name;
             }
         }
         else
         {
-            // on charts or pc page, so changing the ?id= part enough
+            // on charts or gene cluster page, so changing the ?id= part enough
             return url + '?id=' + item_name;
         }
     }
@@ -120,8 +124,8 @@ function generate_inspect_link(type, item_name) {
         var url = window.parent.location.href.split('?')[0];
         var new_url = "";
 
-        if (url.endsWith('/inspect') || url.endsWith('/proteinclusters')) {
-            // on charts or pc page
+        if (url.endsWith('/inspect') || url.endsWith('/geneclusters')) {
+            // on charts or gene cluster page
             new_url = url;
         }
         else
@@ -150,6 +154,17 @@ function getParameterByName(name, url) {
     if (!results) return null;
     if (!results[2]) return '';
     return decodeURIComponent(results[2].replace(/\+/g, " "));
+}
+
+//-------------------------------------------------------------------------------------------------
+function renderMarkdown(content) {
+    var renderer = new marked.Renderer();
+
+    renderer.link = function( href, title, text ) {
+        return '<a target="_blank" href="' + href + '" title="' + title + '">' + text + '</a>';
+    }
+
+    return marked(content, { renderer:renderer });
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -317,7 +332,7 @@ function togglePickerStart(selectbox, togglePicker)
 {
     var tr = $(selectbox).parent().parent();
 
-    if(selectbox.value=='intensity' || selectbox.value=='text') {  
+    if(selectbox.value=='intensity' || selectbox.value=='line' || selectbox.value=='text') {  
         $(tr).find('.picker_start').css('visibility', 'visible');
         if (togglePicker) {
             $(tr).find('.picker_end').css('visibility', 'visible');
@@ -381,6 +396,20 @@ function readableNumber(num) {
     var e = Math.floor(Math.log(num) / Math.log(1000));
     return (num / Math.pow(1000, e)).toPrecision(3) + s[e];
 }
+
+//--------------------------------------------------------------------------------------------------
+function getReadableSeqSizeString(seqSizeInBases, fixed) {
+    // function based on answer at http://stackoverflow.com/questions/10420352/converting-file-size-in-bytes-to-human-readable
+    var i = -1;
+    var baseUnits = [' kB', ' MB', ' GB', ' TB'];
+    do {
+        seqSizeInBases = seqSizeInBases / 1000;
+        i++;
+    } while (seqSizeInBases >= 1000);
+    fixed = fixed ? fixed : fixed == 0 ? 0 : 1;
+    return Math.max(seqSizeInBases, 0.1).toFixed(fixed) + baseUnits[i];
+};
+
 
 //--------------------------------------------------------------------------------------------------
 function linePath(p0, p1)

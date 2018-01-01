@@ -33,7 +33,7 @@ parser.add_argument('--source', default=None,
                     help = 'Source to focus on. If none declared, all single-copy gene sources\
                             are going to be listed.')
 
-args = parser.parse_args()
+args, unknown = parser.parse_known_args()
 
 contigs = set([])
 contig_lengths = {}
@@ -56,11 +56,11 @@ for source in search_info_dict:
     else:
         irrelevant_sources.append(source)
 
-irrelevant_entries = []
+irrelevant_entries = set([])
 for source in irrelevant_sources:
     for entry in search_contigs_dict:
         if search_contigs_dict[entry]['source'] in irrelevant_sources:
-            irrelevant_entries.append(entry)
+            irrelevant_entries.add(entry)
 
 for entry in irrelevant_entries:
     search_contigs_dict.pop(entry)

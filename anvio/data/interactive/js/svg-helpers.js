@@ -314,7 +314,7 @@ function drawFixedWidthText(svg_id, p, string, font_size, color, width, height) 
         for (var x=string.length-3;x>0;x-=3){
             if (textObj.getSubStringLength(0,x)<=width){
                 textObj.textContent=string.substring(0,x)+"...";
-                return;
+                return textObj;
             }
         }
         textObj.textContent="..."; //can't place at all
@@ -602,9 +602,9 @@ function getGradientColor(start_color, end_color, percent) {
    var diff_green = end_green - start_green;
    var diff_blue = end_blue - start_blue;
 
-   diff_red = ( (diff_red * percent) + start_red ).toString(16).split('.')[0];
-   diff_green = ( (diff_green * percent) + start_green ).toString(16).split('.')[0];
-   diff_blue = ( (diff_blue * percent) + start_blue ).toString(16).split('.')[0];
+   diff_red = Math.abs(( (diff_red * percent) + start_red )).toString(16).split('.')[0];
+   diff_green = Math.abs(( (diff_green * percent) + start_green )).toString(16).split('.')[0];
+   diff_blue = Math.abs(( (diff_blue * percent) + start_blue )).toString(16).split('.')[0];
 
    // ensure 2 digits by color
    if( diff_red.length == 1 )

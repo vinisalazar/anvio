@@ -6,6 +6,7 @@ The default client of this library is under bin/anvi-merge"""
 
 
 import os
+import argparse
 
 import anvio
 import anvio.utils as utils
@@ -19,8 +20,8 @@ import anvio.auxiliarydataops as auxiliarydataops
 
 from anvio.errors import ConfigError
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2015, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -235,12 +236,15 @@ class MultipleRuns:
 
 
     def merge_split_coverage_data(self):
-        output_file_path = os.path.join(self.output_directory, 'AUXILIARY-DATA.h5')
+        output_file_path = os.path.join(self.output_directory, 'AUXILIARY-DATA.db')
         merged_split_coverage_values = auxiliarydataops.AuxiliaryDataForSplitCoverages(output_file_path, self.contigs_db_hash, create_new=True)
+
+        self.progress.new('Merging split coverage data')
 
         # fill coverages in from all samples
         for input_profile_db_path in self.profile_dbs_info_dict:
-            input_file_path = os.path.join(os.path.dirname(input_profile_db_path), 'AUXILIARY-DATA.h5')
+            self.progress.update(input_profile_db_path)
+            input_file_path = os.path.join(os.path.dirname(input_profile_db_path), 'AUXILIARY-DATA.db')
             sample_split_coverage_values = auxiliarydataops.AuxiliaryDataForSplitCoverages(input_file_path, self.contigs_db_hash)
 
             for split_name in self.split_names:
@@ -250,7 +254,10 @@ class MultipleRuns:
 
             sample_split_coverage_values.close()
 
+        merged_split_coverage_values.store()
         merged_split_coverage_values.close()
+
+        self.progress.end()
 
 
     def set_normalization_multiplier(self):
@@ -286,8 +293,6 @@ class MultipleRuns:
         # set database paths
         self.merged_profile_db_path = os.path.join(self.output_directory, 'PROFILE.db')
         self.database_paths['PROFILE.db'] = os.path.abspath(self.merged_profile_db_path)
-        self.samples_db_path = os.path.join(self.output_directory, 'SAMPLES.db')
-        self.database_paths['SAMPLES.db'] = os.path.abspath(self.samples_db_path)
 
         profile_db = dbops.ProfileDatabase(self.merged_profile_db_path)
 
@@ -329,7 +334,7 @@ class MultipleRuns:
                        'total_reads_mapped': total_reads_mapped_list,
                        'merged': True,
                        'blank': False,
-                       'contigs_clustered': not self.skip_hierarchical_clustering,
+                       'contigs_ordered': not self.skip_hierarchical_clustering,
                        'default_view': 'mean_coverage',
                        'min_contig_length': self.min_contig_length,
                        'SNVs_profiled': self.SNVs_profiled,
@@ -363,9 +368,7 @@ class MultipleRuns:
 
         self.set_normalization_multiplier()
 
-        self.progress.new('Merging split coverage values')
         self.merge_split_coverage_data()
-        self.progress.end()
 
         if self.SNVs_profiled:
             self.progress.new('Merging variable positions tables')
@@ -393,8 +396,7 @@ class MultipleRuns:
         if not self.skip_concoct_binning and __CONCOCT_IS_AVAILABLE__:
             self.bin_contigs_concoct()
 
-        # generate a samples database while you are at it
-        self.gen_samples_db_from_view_data()
+        self.populate_layers_additional_data_and_layer_orders()
 
         self.run.quit()
 
@@ -418,67 +420,61 @@ class MultipleRuns:
         return self.normalized_coverages[target][split_name][sample_id] / denominator if denominator else 0
 
 
-    def gen_samples_db_from_view_data(self):
-        """Geenrate a samples db for the merged profile.
-
-           We use the ProfileSuperclass to load all the views we added into the meged profile,
-           and generate clusterings of samples for each view to generate a default samples database."""
-
-        self.run.info_single("SAMPLES.db stuff...", nl_before=1, nl_after=1, mc="blue")
+    def populate_layers_additional_data_and_layer_orders(self):
+        self.run.info_single("Additional data and layer orders...", nl_before=1, nl_after=1, mc="blue")
 
         essential_fields = [f for f in self.atomic_data_fields if constants.IS_ESSENTIAL_FIELD(f)]
 
-        class Args: pass
-        args = Args()
-        args.profile_db = self.merged_profile_db_path
-
         # initialize views.
+        args = argparse.Namespace(profile_db = self.merged_profile_db_path)
         profile_db_super = dbops.ProfileSuperclass(args)
         profile_db_super.load_views(omit_parent_column=True)
 
-        sample_orders = {}
+        # figure out sample orders dictionary
+        layer_orders_data_dict = {}
         failed_attempts = []
-        self.progress.new('Generating a default SAMPLES.db')
+        self.progress.new('Working on layer orders')
         for essential_field in essential_fields:
-            self.progress.update('recovering samples order for "%s"' % (essential_field))
+            self.progress.update('recovering order for "%s"' % (essential_field))
             try:
-                sample_orders[essential_field] = \
-                        clustering.get_newick_tree_data_for_dict(profile_db_super.views[essential_field]['dict'],
-                                                                 distance=self.distance,
-                                                                 linkage=self.linkage,
-                                                                 transpose=True)
+                data_value = clustering.get_newick_tree_data_for_dict(profile_db_super.views[essential_field]['dict'],
+                                                                      distance=self.distance,
+                                                                      linkage=self.linkage,
+                                                                      transpose=True)
+
+                layer_orders_data_dict[essential_field] = {'data_value': data_value, 'data_type': 'newick'}
             except:
                 failed_attempts.append(essential_field)
         self.progress.end()
 
-        if not len(sample_orders):
-            self.run.warning("This may or may not be important: anvi'o attempted to generate a samples\
-                              database for this merged profile, however, all attempts to cluster samples\
-                              based on view data available in the merged profile failed. No samples db\
-                              for you :/")
+        if not len(layer_orders_data_dict):
+            self.run.warning("This may or may not be important: anvi'o attempted to generate orders for your\
+                              samples based on the view data, however, it failed :/")
             return
 
         if len(failed_attempts):
             self.run.warning("While anvi'o was trying to generate clusterings of samples based on view data\
                               available in the merged profile, clustering of some of the essential data\
                               failed. It is likely not a very big deal, but you shall be the judge of it.\
-                              Anvi'o now proceeds to generate a samples db with clusterings it generated\
-                              using the view data that worked. Here is the list of stuff that failed: '%s'"\
+                              Anvi'o now proceeds to store layers order information for those view items\
+                              the clustering in fact worked. Here is the list of stuff that failed: '%s'"\
                               % (', '.join(failed_attempts)))
 
-        samples_order_file_path = filesnpaths.get_temp_file_path()
-        samples_order_file = open(samples_order_file_path, 'w')
-        samples_order_file.write('attributes\tbasic\tnewick\n')
-        for sample_order in sample_orders:
-            samples_order_file.write('%s\t%s\t%s\n' % (sample_order, '', sample_orders[sample_order]))
-        samples_order_file.close()
+        self.progress.new('Working on layer additional data')
+        self.progress.update('...')
 
-        samples_db = dbops.SamplesInformationDatabase(self.samples_db_path, quiet=False)
-        samples_db.create(samples_order_path=samples_order_file_path)
+        layer_additional_data_dict = {}
+        for sample_name in self.sample_ids_found_in_input_dbs:
+            layer_additional_data_dict[sample_name] = {}
 
-        os.remove(samples_order_file_path)
+        # figure out num reads mapped per sample:
+        for sample_name in self.sample_ids_found_in_input_dbs:
+            layer_additional_data_dict[sample_name]['num_mapped_reads'] = self.total_reads_mapped_per_sample[sample_name]
 
-        self.run.info('Samples database', self.samples_db_path)
+        self.progress.end()
+
+        dbops.TableForLayerOrders(args).add(layer_orders_data_dict)
+        dbops.TableForLayerAdditionalData(args).add(layer_additional_data_dict, ['num_mapped_reads'])
 
 
     def gen_view_data_tables_from_atomic_data(self):
@@ -568,9 +564,9 @@ class MultipleRuns:
         self.run.info_single("Anvi'o hierarchical clustering of contigs...", nl_before=1, nl_after=1, mc="blue")
 
         if not self.skip_hierarchical_clustering:
-            dbops.do_hierarchical_clusterings(self.merged_profile_db_path, self.clustering_configs, self.split_names, self.database_paths, \
-                                              input_directory=self.output_directory, default_clustering_config=constants.merged_default, \
-                                              distance=self.distance, linkage=self.linkage, run=self.run, progress=self.progress)
+            dbops.do_hierarchical_clustering_of_items(self.merged_profile_db_path, self.clustering_configs, self.split_names, self.database_paths, \
+                                                      input_directory=self.output_directory, default_clustering_config=constants.merged_default, \
+                                                      distance=self.distance, linkage=self.linkage, run=self.run, progress=self.progress)
 
 
     def get_split_parents(self):

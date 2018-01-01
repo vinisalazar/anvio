@@ -14,7 +14,7 @@ do
 done
 
 INFO "Generating an EMPTY contigs database"
-anvi-gen-contigs-database -f $files/contigs.fa -o $output_dir/CONTIGS.db -L 1000
+anvi-gen-contigs-database -f $files/contigs.fa -o $output_dir/CONTIGS.db -L 1000 --project-name "Contigs DB for anvi'o mini self-test"
 
 INFO "Populating taxonomy for splits table in the database using 'centrifuge' parser"
 anvi-import-taxonomy -c $output_dir/CONTIGS.db -p centrifuge -i $files/example_files_for_centrifuge_taxonomy/centrifuge_report.tsv $files/example_files_for_centrifuge_taxonomy/centrifuge_hits.tsv
@@ -43,10 +43,17 @@ done
 
 INFO "Merging profiles"
 # merge samples
-anvi-merge $output_dir/SAMPLE-*/*.db -o $output_dir/SAMPLES-MERGED -c $output_dir/CONTIGS.db --description $files/example_description.md
+anvi-merge $output_dir/SAMPLE-*/PROFILE.db -o $output_dir/SAMPLES-MERGED -c $output_dir/CONTIGS.db --description $files/example_description.md
 
-INFO "Generating a samples information database with samples information and samples order"
-anvi-gen-samples-info-database -D $files/samples-information.txt -R $files/samples-order.txt -o $output_dir/SAMPLES.db
+INFO "Import layer additional data from file"
+anvi-import-misc-data $files/samples-information.txt \
+                      -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                      --target-data-table layers
+
+INFO "Import layer orders from file"
+anvi-import-misc-data $files/samples-order.txt \
+                      -p $output_dir/SAMPLES-MERGED/PROFILE.db \
+                      --target-data-table layer_orders
 
 INFO "Importing a state file into the merged profile"
 anvi-import-state -p $output_dir/SAMPLES-MERGED/PROFILE.db --state $files/example_state.json --name default
@@ -58,7 +65,6 @@ INFO "Firing up the interactive interface"
 # fire up the browser to show how does the merged samples look like.
 anvi-interactive -p $output_dir/SAMPLES-MERGED/PROFILE.db \
                  -c $output_dir/CONTIGS.db \
-                 -s $output_dir/SAMPLES.db \
                  --split-hmm-layers
 
 INFO "Summarizing CONCOCT results"

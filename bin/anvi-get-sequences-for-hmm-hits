@@ -51,8 +51,8 @@ from anvio.dbops import ContigsSuperclass
 from anvio.errors import ConfigError, FilesNPathsError
 
 
-__author__ = "A. Murat Eren"
-__copyright__ = "Copyright 2015, The anvio Project"
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
 __credits__ = []
 __license__ = "GPL 3.0"
 __version__ = anvio.__version__
@@ -79,26 +79,47 @@ def main(args):
                                hit for a gene in a given genome. Anvi'o could have set this flag on your behalf, but it just\
                                is not that kind of a platform :/")
 
+    if args.max_num_genes_missing_from_bin and not args.gene_names and not args.list_available_gene_names:
+        raise ConfigError("You can only use --max-num-genes-missing-from-bin flag if you already know what gene names you are\
+                           interested in (just to make sure you know what you are doing).")
+
+    for param, value in [('--max-num-genes-missing-from-bin', args.max_num_genes_missing_from_bin),
+                         ('--min-num-bins-gene-occurs', args.min_num_bins_gene_occurs)]:
+        if value is not None:
+            try:
+                value = int(value)
+                assert(value >= 0)
+            except:
+                raise ConfigError("For obvious reasons, anvi'o expects the parameter %s to be a non-negative integer :/" % param)
+
     hmm_sources = set([s.strip() for s in args.hmm_sources.split(',')]) if args.hmm_sources else set([])
 
-    # the following if/else block either uses SequencesForHMMHits or the wrapper class 
+    # the following if/else block either uses SequencesForHMMHits or the wrapper class
     # SequencesForHMMHitsWrapperForMultipleContigs (if there are multiple contigs files)
     # to get sequences, and construct `splits_dict` depending on the input files. it is
     # shitty code, and can be improved.
     if args.external_genomes:
-        s = hmmopswrapper.SequencesForHMMHitsWrapperForMultipleContigs(args, hmm_sources) 
+        s = hmmopswrapper.SequencesForHMMHitsWrapperForMultipleContigs(args, hmm_sources)
         splits_dict = s.splits_dict
     else:
+        info_table = hmmops.SequencesForHMMHits(args.contigs_db).hmm_hits_info
+
+        # let's quickly check whether we have all the hmm_sources the user may have
+        # requested has anything to do with the ones we have in the database
+        if hmm_sources:
+            missing_hmm_sources = [s for s in hmm_sources if s not in info_table]
+            if(missing_hmm_sources):
+                raise ConfigError("At least one of the HMM sources you requested are missing form the HMMs the contigs database\
+                                   knows about :/ Here they are: '%s'" % (', '.join(missing_hmm_sources)))
+
         if args.list_hmm_sources:
-            info_table = hmmops.SequencesForHMMHits(args.contigs_db).hmm_hits_info
             for source in info_table:
                 t = info_table[source]
                 run.info_single('%s [type: %s] [num genes: %d]' % (source, t['search_type'], len(t['genes'].split(','))))
             sys.exit(0)
 
         if args.list_available_gene_names:
-            info_table = hmmops.SequencesForHMMHits(args.contigs_db).hmm_hits_info
-            for source in set([s.strip() for s in args.hmm_sources.split(',')]) if args.hmm_sources else None or info_table:
+            for source in hmm_sources or info_table:
                 t = info_table[source]
                 run.info_single('%s [type: %s]: %s' % (source, t['search_type'], ', '.join(sorted(t['genes'].split(',')))), nl_after = 2)
             sys.exit(0)
@@ -130,6 +151,32 @@ def main(args):
     if len(gene_names):
         hmm_sequences_dict = utils.get_filtered_dict(hmm_sequences_dict, 'gene_name', set(gene_names))
         run.info('Filtered hits', '%d hits remain after filtering for %d gene(s)' % (len(hmm_sequences_dict), len(gene_names)))
+
+    if args.max_num_genes_missing_from_bin is not None:
+        hmm_sequences_dict, bins_removed = s.filter_hmm_sequences_dict_for_bins_that_lack_more_than_N_genes(hmm_sequences_dict, gene_names, int(args.max_num_genes_missing_from_bin))
+
+        if len(bins_removed):
+            run.info('Filtered hits', '%d hits remain after filtering for `--max-num-genes-missing-from-bin` flag' % (len(hmm_sequences_dict)))
+
+            run.warning('The `--max-num-genes-missing-from-bin` flag caused the removal of %d bins (or genomes, whatever)\
+                         from your analysis. This is the list of bins that will live in our memories: %s' % \
+                                                (len(bins_removed), ', '.join(bins_removed)))
+
+    if args.min_num_bins_gene_occurs is not None:
+        hmm_sequences_dict, genes_removed = s.filter_hmm_sequences_dict_from_genes_that_occur_in_less_than_N_bins(hmm_sequences_dict, int(args.min_num_bins_gene_occurs))
+
+        if len(genes_removed):
+            run.info('Filtered hits', '%d hits remain after filtering for `--min-num-bins-gene-occurs` flag' % (len(hmm_sequences_dict)))
+
+            run.warning("The `--min-num-bins-gene-occurs` parameter caused the removal of %d genes from your analysis because \
+                         they occurred in less than %d bins/genomes in your analysis. This is the list of genes that gon'\
+                         buhbye: %s." % (len(genes_removed), int(args.min_num_bins_gene_occurs), ', '.join(genes_removed)))
+
+            # update the gene names variable .. this is such a mess :( "WHO WROTE THIS SHIT CODE", yelled Meren, looking
+            # at this cursed main function in his office on a Saturday night, knowing very well who did it. thanks
+            # to his lack of shame he said to himself "well, I guess it is OK if it stays like this for now".
+            if(gene_names):
+                gene_names = [g for g in gene_names if g not in genes_removed]
 
     if not hmm_sequences_dict:
         raise ConfigError("Your selections resulted in 0 hits. There is nothing to report. Are you\
@@ -165,7 +212,8 @@ def main(args):
                                      args.output_file, \
                                      concatenate_genes=args.concatenate_genes, \
                                      separator=separator, \
-                                     genes_order=list(gene_names) if len(gene_names) else None)
+                                     genes_order=list(gene_names) if len(gene_names) else None, \
+                                     align_with=args.align_with)
 
     run.info('Mode', 'AA seqeunces' if args.get_aa_sequences else 'DNA seqeunces', mc='green')
     run.info('Genes are concatenated', args.concatenate_genes)
@@ -215,6 +263,9 @@ if __name__ == '__main__':
                                        using the `gene-names` argument. Each concatenated sequence will be separated from the other\
                                        ones by the `separator`.")
     groupG.add_argument(*anvio.A('concatenate-genes'), **anvio.K('concatenate-genes'))
+    groupG.add_argument(*anvio.A('max-num-genes-missing-from-bin'), **anvio.K('max-num-genes-missing-from-bin'))
+    groupG.add_argument(*anvio.A('min-num-bins-gene-occurs'), **anvio.K('min-num-bins-gene-occurs'))
+    groupG.add_argument(*anvio.A('align-with'), **anvio.K('align-with'))
     groupG.add_argument(*anvio.A('separator'), **anvio.K('separator', {'help': 'A word that will be used to\
                                   sepaate concatenated gene sequences from each other (IF you are using this\
                                   program with `--concatenate-genes` flag). The default is "XXX" for amino\
@@ -223,7 +274,7 @@ if __name__ == '__main__':
     groupG = parser.add_argument_group('OPTIONAL', "Everything is optional, but some options are more optional than others.")
     groupG.add_argument(*anvio.A('return-best-hit'), **anvio.K('return-best-hit'))
 
-    args = parser.parse_args()
+    args = anvio.get_args(parser)
 
     try:
         main(args)
