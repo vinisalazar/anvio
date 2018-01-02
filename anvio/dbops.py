@@ -86,9 +86,9 @@ class GeneCallsBaseClass(object):
         self.progress = progress
 
         # these are the variables that are going to be initialized in this class:
-        self.genes_are_called = None
-        self.gene_callers_available = None
-        self.genes_in_contigs_dict = None
+        self.genes_are_called = False
+        self.gene_callers_available = False
+        self.genes_in_contigs_dict = {}
 
         A = lambda x: args.__dict__[x] if x in args.__dict__ else None
         self.contigs_db_path = A('contigs_db')
@@ -99,7 +99,6 @@ class GeneCallsBaseClass(object):
 
         is_contigs_db(self.contigs_db_path)
 
-
         # open the database:
         self.contigs_db = ContigsDatabase(self.contigs_db_path, run=self.run, progress=self.progress)
 
@@ -109,6 +108,10 @@ class GeneCallsBaseClass(object):
         # what gene callers do we have in there?
         self.gene_callers_available = self.contigs_db.db.get_unique_counts_dict_for_column_in_table(t.genes_in_contigs_table_name, 'source')
 
+        if A('list_gene_callers'):
+            self.list_gene_callers()
+            return
+
         if not len(self.gene_callers_available):
             return
 
@@ -116,9 +119,9 @@ class GeneCallsBaseClass(object):
             self.progress.end()
             self.contigs_db.disconnect()
             raise ConfigError("A GeneCallsBaseClass instance is created with a requested gene caller '%s', but it is not\
-                               is not one of the available gene callers in this database :/ Here are the ones the contigs\
-                               database at '%s' knows about: %s." % \
-                                                        (self.contigs_db_path, self.gene_caller, ', '.join(self.gene_callers_available)))
+                               is not one of the available gene callers in this database :/ These are the\
+                               gene callers the contigs database at '%s' knows about: %s" % \
+                                                        (self.gene_caller, self.contigs_db_path, ', '.join(self.gene_callers_available)))
 
         # setting up the gene caller for this class to populate gene callers dict
         self.progress.new('GeneCallsBaseClass')
@@ -129,6 +132,20 @@ class GeneCallsBaseClass(object):
 
         self.progress.end()
         self.contigs_db.disconnect()
+
+
+    def list_gene_callers(self):
+        if not self.genes_are_called:
+            self.run.info_single("There is no gene caller in the databse to list :/", nl_before=1, nl_after=1)
+            return
+
+        gene_callers = sorted(list(self.gene_callers_available.keys()))
+        self.run.warning('', 'AVAILABLE GENE CALLERS (%d FOUND)' % (len(self.gene_callers_available)), lc='yellow')
+        for gene_caller in gene_callers:
+            self.run.info_single('%s (with %d gene calls) %s' % (gene_caller,\
+                                                                 self.gene_callers_available[gene_caller], \
+                                                                 '(default)' if gene_caller == constants.default_gene_caller else ''),
+                                 nl_after = 1 if gene_caller == gene_callers[-1] else 0)
 
 
 class ContigsSuperclass(GeneCallsBaseClass):
@@ -4021,35 +4038,33 @@ class TablesForHMMHits(Table, GeneCallsBaseClass):
 
             if not len(search_results_dict):
                 run.info_single("The HMM source '%s' returned 0 hits. SAD (but it's stil OK)." % source, nl_before=1)
+            else:
+                if context == 'CONTIG':
+                    # we are in trouble here. because our search results dictionary contains no gene calls, but contig
+                    # names that contain our hits. on the other hand, the rest of the code outside of this if statement
+                    # expects a `search_results_dict` with gene callers id in it. so there are two things we need to do
+                    # to do. one is to come up with some new gene calls and add them to the contigs database. so things
+                    # will go smoothly downstream. two, we will need to update our `search_results_dict` so it looks
+                    # like a a dictionary the rest of the code expects with `gene_callers_id` fields. both of these
+                    # steps are going to be taken care of in the following function. magic.
 
+                    self.run.warning("Alright! You just called an HMM profile that runs on contigs. Because it is not\
+                                     working with anvi'o gene calls directly, the resulting hits will need to be added\
+                                     as 'new gene calls' into the contigs database. This is a new feature, and if it\
+                                     starts screwing things up for you please let us know. Other than that you're pretty\
+                                     much golden. Carry on.", header="Psst. Your fancy HMM profile '%s' speaking" % source,
+                                     lc="green")
 
-            if context == 'CONTIG':
-                # we are in trouble here. because our search results dictionary contains no gene calls, but contig
-                # names that contain our hits. on the other hand, the rest of the code outside of this if statement
-                # expects a `search_results_dict` with gene callers id in it. so there are two things we need to do
-                # to do. one is to come up with some new gene calls and add them to the contigs database. so things
-                # will go smoothly downstream. two, we will need to update our `search_results_dict` so it looks
-                # like a a dictionary the rest of the code expects with `gene_callers_id` fields. both of these
-                # steps are going to be taken care of in the following function. magic.
+                    num_hits_before = len(search_results_dict)
+                    search_results_dict = utils.get_pruned_HMM_hits_dict(search_results_dict)
+                    num_hits_after = len(search_results_dict)
 
-                self.run.warning("Alright! You just called an HMM profile that runs on contigs. Because it is not\
-                                 working with anvi'o gene calls directly, the resulting hits will need to be added\
-                                 as 'new gene calls' into the contigs database. This is a new feature, and if it\
-                                 starts screwing things up for you please let us know. Other than that you're pretty\
-                                 much golden. Carry on.",
-                                 header="Psst. Your fancy HMM profile '%s' speaking" % source,
-                                 lc="green")
+                    if num_hits_before != num_hits_after:
+                        self.run.info('Pruned', '%d out of %d hits were removed due to redundancy' % (num_hits_before - num_hits_after, num_hits_before))
 
-                num_hits_before = len(search_results_dict)
-                search_results_dict = utils.get_pruned_HMM_hits_dict(search_results_dict)
-                num_hits_after = len(search_results_dict)
+                    search_results_dict = self.add_new_gene_calls_to_contigs_db_and_update_serach_results_dict(kind_of_search, search_results_dict)
 
-                if num_hits_before != num_hits_after:
-                    self.run.info('Pruned', '%d out of %d hits were removed due to redundancy' % (num_hits_before - num_hits_after, num_hits_before))
-
-                search_results_dict = self.add_new_gene_calls_to_contigs_db_and_update_serach_results_dict(kind_of_search, search_results_dict)
-
-            self.append(source, reference, kind_of_search, domain, all_genes_searched_against, search_results_dict)
+                self.append(source, reference, kind_of_search, domain, all_genes_searched_against, search_results_dict)
 
         if not self.debug:
             commander.clean_tmp_dirs()
