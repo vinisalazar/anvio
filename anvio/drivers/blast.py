@@ -68,8 +68,7 @@ class BLAST:
         if self.overwrite_output_destinations:
             force_makedb = True
 
-        if os.path.exists(self.target_fasta + '.phr') and os.path.exists(self.target_fasta + '.pin')\
-                                                and os.path.exists(self.target_fasta + '.psq') and not force_makedb:
+        if os.path.exists(self.target_fasta + '%s' % ('.phr' if self.search_program == 'blastp' else '.nhr')) and not force_makedb:
             self.run.warning("Notice: A BLAST database is found in the output directory, and will be used!")
         else:
             self.makedb()
@@ -79,6 +78,8 @@ class BLAST:
             self.run.warning("Notice: A BLAST search result is found in the output directory: skipping BLASTP!")
         else:
             self.blast()
+
+        self.run.info('Raw BLAST results', self.search_output_path)
 
         return self.search_output_path
 
@@ -96,14 +97,14 @@ class BLAST:
 
         cmd_line = ['makeblastdb',
                     '-in', self.target_fasta,
-                    '-dbtype', 'prot',
+                    '-dbtype', 'prot' if self.search_program == 'blastp' else 'nucl',
                     '-out', self.target_fasta]
 
         utils.run_command(cmd_line, self.run.log_file_path)
 
         self.progress.end()
 
-        expected_output = self.target_fasta + '.phr'
+        expected_output = self.target_fasta + '%s' % ('.phr' if self.search_program == 'blastp' else '.nhr')
         self.check_output(expected_output, 'makeblastdb')
 
         self.run.info('blast makeblast cmd', cmd_line, quiet=True)
