@@ -13,7 +13,7 @@ __maintainer__ = "A. Murat Eren"
 __email__ = "a.murat.eren@gmail.com"
 
 
-contigs_db_version = "10"
+contigs_db_version = "11"
 profile_db_version = "23"
 pan_db_version = "8"
 auxiliary_data_version = "2"
@@ -55,6 +55,9 @@ splits_info_table_name                 = 'splits_basic_info'
 splits_info_table_structure            = ['split', 'order_in_parent' , 'start' ,  'end'  , 'length' , 'gc_content', 'gc_content_parent', 'parent' ]
 splits_info_table_types                = ['text' ,     'numeric     ','numeric','numeric', 'numeric',   'numeric' ,      'numeric'     ,  'text'  ]
 
+contig_links_table_name                = 'contig_links'
+contig_links_table_structure           = ['entry_id',  'c1' ,  'c2' ,  'weight', 'source']
+contig_links_table_types               = [ 'numeric', 'text', 'text', 'numeric',  'text' ]
 
 # following tables deal with open reading frames found in contis by a gene caller (such as prodigal), and their functional annotations and stuff.
 
