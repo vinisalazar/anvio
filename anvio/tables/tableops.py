@@ -192,11 +192,9 @@ class Table(object):
         # removes rows from each table in 'tables_to_remove' where 'table_column' equals 'value'
         database = db.DB(self.db_path, self.version)
 
-        table_content = database.get_table_as_dict(tables_to_clear[0])
-        if key in table_content:
-            self.run.warning('Previous entries for "%s" is being removed from "%s"' % (key, ', '.join(tables_to_clear)))
-            for table_name in tables_to_clear:
-                database._exec('''DELETE FROM %s WHERE %s = "%s"''' % (table_name, table_column, key))
+        self.run.warning('Previous entries for "%s" is being removed from "%s"' % (key, ', '.join(tables_to_clear)))
+        for table_name in tables_to_clear:
+            database._exec('''DELETE FROM %s WHERE %s = "%s"''' % (table_name, table_column, key))
 
         database.disconnect()
 
