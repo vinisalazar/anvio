@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+# -*- coding: utf-8
+"""
+    Contig links client.
+"""
+
+import sys
+
+import anvio
+import anvio.contiglinks as contiglinks
+
+from anvio.errors import ConfigError, FilesNPathsError
+
+__author__ = "Developers of anvi'o (see AUTHORS.txt)"
+__copyright__ = "Copyleft 2015-2018, the Meren Lab (http://merenlab.org/)"
+__credits__ = []
+__license__ = "GPL 3.0"
+__version__ = anvio.__version__
+__maintainer__ = "A. Murat Eren"
+__email__ = "a.murat.eren@gmail.com"
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description="A program that takes a contigs database, and long reads, and generates links between contigs in\
+                                                  the contigs databse if they match to the same long read.")
+
+    groupA = parser.add_argument_group('INPUTS', 'There are two possible inputs for anvio profiler. You must\
+                                                  to declare either of these two.')
+    groupA.add_argument(*anvio.A('contigs-db'), **anvio.K('contigs-db'))
+    groupA.add_argument(*anvio.A('long-reads-fasta'), **anvio.K('long-reads-fasta'))
+
+    groupB = parser.add_argument_group("FINE TUNE", "Fine tuning parameters to elminate weak hits.")
+    groupB.add_argument('--min-percent-identity', type = float, default = 0.0, metavar = "PERCENT_IDENTITY", help = "Minimum percent identity\
+                                between the two local alignment. The default is %(default)g percent.")
+    groupB.add_argument('--min-alignment-length', type = int, default = 100, metavar = "NUM_NUCLEOTIDES", help = "Minimum number of nucleotides\
+                                to consider a hit. The default is %(default)g nts.")
+    groupA.add_argument(*anvio.A('min-e-value'), **anvio.K('min-e-value'))
+
+    groupC = parser.add_argument_group("PERFORMANCE", "The answer to is it a coffee or a lunch break.")
+    groupC.add_argument(*anvio.A('num-threads'), **anvio.K('num-threads'))
+
+    groupD = parser.add_argument_group("OUTPUT THINGIES", "Output related params.")
+    groupD.add_argument(*anvio.A('output-dir'), **anvio.K('output-dir'))
+
+    args = anvio.get_args(parser)
+
+    try:
+        links = contiglinks.LongReadLinks(args)
+        links.process()
+    except ConfigError as e:
+        print(e)
+        sys.exit(-1)
+    except FilesNPathsError as e:
+        print(e)
+        sys.exit(-2)
