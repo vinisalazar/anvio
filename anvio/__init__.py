@@ -307,6 +307,12 @@ D = {
                       must match to those in other input files. If there is a problem anvi'o will gracefully\
                       complain about it."}
                 ),
+    'long-reads-fasta': (
+            ['-f', '--long-reads-fasta'],
+            {'metavar': 'FASTA',
+             'required': True,
+             'help': "The FASTA file for the long-read sequences."}
+                ),
     'view-data': (
             ['-d', '--view-data'],
             {'metavar': 'VIEW_DATA',
@@ -1159,7 +1165,7 @@ D = {
             {'metavar': 'E-VALUE',
              'default': 1e-15,
              'type': float,
-             'help': "Minimum significance score of an HMM find to be considered as a valid hit.\
+             'help': "Minimum significance score of an HMM or BLAST hit to be considered a valid hit.\
                       Default is %(default)g."}
                 ),
     'min-percent-identity': (
