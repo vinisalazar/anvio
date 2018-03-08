@@ -32,11 +32,14 @@ if __name__ == '__main__':
     groupA.add_argument(*anvio.A('long-reads-fasta'), **anvio.K('long-reads-fasta'))
 
     groupB = parser.add_argument_group("FINE TUNE", "Fine tuning parameters to elminate weak hits.")
-    groupB.add_argument('--min-percent-identity', type = float, default = 0.0, metavar = "PERCENT_IDENTITY", help = "Minimum percent identity\
+    groupB.add_argument(*anvio.A('min-e-value'), **anvio.K('min-e-value'))
+    groupB.add_argument('--min-percent-identity', type=float, default=80.0, metavar="PERCENT_IDENTITY", help="Minimum percent identity\
                                 between the two local alignment. The default is %(default)g percent.")
-    groupB.add_argument('--min-alignment-length', type = int, default = 100, metavar = "NUM_NUCLEOTIDES", help = "Minimum number of nucleotides\
+    groupB.add_argument('--min-alignment-length', type=int, default=300, metavar="NUM_NUCLEOTIDES", help="Minimum number of nucleotides\
                                 to consider a hit. The default is %(default)g nts.")
-    groupA.add_argument(*anvio.A('min-e-value'), **anvio.K('min-e-value'))
+    groupB.add_argument('--skip-alignment-position-check', default=False, action="store_true", help = "By default this program will try to\
+                                keep hits between contigs and the long reads if the alignments cover the ends of beginnings of contigs,\
+                                since the ones in the middle are more likely to be irrelevant hits due to conserved sequences.")
 
     groupC = parser.add_argument_group("PERFORMANCE", "The answer to is it a coffee or a lunch break.")
     groupC.add_argument(*anvio.A('num-threads'), **anvio.K('num-threads'))
