@@ -9,6 +9,8 @@ import os
 import itertools
 
 import anvio
+import anvio.tables as t
+import anvio.dbops as dbops
 import anvio.utils as utils
 import anvio.terminal as terminal
 import anvio.filesnpaths as filesnpaths
@@ -35,6 +37,7 @@ class LongReadLinks(object):
         self.long_reads_fasta = A('long_reads_fasta')
         self.min_percent_identity = A('min_percent_identity')
         self.min_alignment_length = A('min_alignment_length')
+        self.skip_alignment_position_check = A('skip_alignment_position_check')
         self.output_dir_path = A('output_dir')
         self.num_threads = A('num_threads')
         self.min_e_value = A('min_e_value')
@@ -103,7 +106,7 @@ class LongReadLinks(object):
         return blast.get_blast_results()
 
 
-    def gen_connections(self, blast_results):
+    def gen_connections(self, blast_results, contigs_basic_info):
         self.progress.new('Processing search results')
         self.progress.update('...')
 
@@ -116,11 +119,13 @@ class LongReadLinks(object):
         num_hits_considered = 0
         removed_due_to_percent_identity = 0
         removed_due_to_alignment_length = 0
+        removed_due_to_position_of_alignment = 0
         for line in open(blast_results):
             fields = line.strip().split('\t')
 
             query_id, subject_id, perc_id, aln_length, mismatches, gaps, q_start, q_end, s_start, s_end, e_val, bit_score = \
                 [mapping[i](fields[i]) for i in range(0, len(mapping))]
+            s_length = contigs_basic_info[subject_id]['length']
 
             num_hits_considered += 1
 
@@ -141,8 +146,20 @@ class LongReadLinks(object):
                 removed_due_to_percent_identity += 1
                 continue
 
+            #
+            # FILTERING BASED ON POSITION OF ALIGNMENT
+            #
+            if not self.skip_alignment_position_check:
+                if (min(s_start, s_end) - self.min_alignment_length) < 0 or (max(s_start, s_end) + self.min_alignment_length) > s_length:
+                    # this is OK. which means the alignment is either like this:
+                    pass
+                else:
+                    removed_due_to_position_of_alignment += 1
+                    continue
+
             if anvio.DEBUG:
-                print("Line %d: %s vs %s: %.2f%% identity over %d nts" % (num_hits_considered, query_id, subject_id, perc_id, aln_length))
+                print("OKK %06d: %s vs %s: %.2f%% identity over %d nts. Contig length, aln start, aln end: %d:%d:%d" \
+                                    % (num_hits_considered, query_id, subject_id, perc_id, aln_length, s_length, s_start, s_end))
 
             if query_id not in long_read_commons:
                 long_read_commons[query_id] = set([])
@@ -157,6 +174,7 @@ class LongReadLinks(object):
         self.run.info('Hits considered', '%s' % pp(num_hits_considered))
         self.run.info('Num hits removed due to percent identity', '%s' % pp(removed_due_to_percent_identity), mc='red')
         self.run.info('Num hits removed due to min alignment length', '%s' % pp(removed_due_to_alignment_length), mc='red')
+        self.run.info('Num hits removed due to alignment position', '%s' % pp(removed_due_to_position_of_alignment), mc='red')
         self.run.info('Hits kept', '%s' % pp(num_hits_passed))
 
         self.run.warning(None, 'Connections', lc='cyan')
@@ -167,19 +185,26 @@ class LongReadLinks(object):
         for q_id in singletons:
             long_read_commons.pop(q_id)
 
-        num_connecting_contigs = [len(long_read_commons[s_id]) for s_id in long_read_commons]
+        long_read_ids_sorted_by_num_connections = sorted([(len(long_read_commons[long_read_id]), long_read_id) for long_read_id in long_read_commons], reverse=True)
+        num_connecting_contigs = [e[0] for e in long_read_ids_sorted_by_num_connections]
 
         self.run.info('Num singletons removed', '%s' % pp(len(singletons)), mc='red')
         self.run.info('Total num contig connections', sum(num_connecting_contigs))
         self.run.info('Min num connected contigs', min(num_connecting_contigs))
         self.run.info('Max num connected contigs', max(num_connecting_contigs))
 
+        if anvio.DEBUG:
+            self.run.warning(None, 'DEBUG: Top connecting long reads', lc='green')
+            for i in range(0, 10):
+                e = long_read_ids_sorted_by_num_connections[i]
+                self.run.info(e[1], e[0], nl_after=(1 if i == 9 else 0))
+
         connections = set()
 
         for v in long_read_commons.values():
             # here we add a weight of 1 to all links
-            for t in [tuple(sorted(x) + [1]) for x in itertools.combinations(v, r=2)]:
-                connections.add(t)
+            for tpl in [tuple(sorted(x) + [1]) for x in itertools.combinations(v, r=2)]:
+                connections.add(tpl)
 
         self.run.info('Final num connections', pp(len(connections)), nl_after=1)
 
@@ -220,14 +245,16 @@ class LongReadLinks(object):
         ## run search
         BLAST_results = self.run_blast(self.long_reads_fasta, contigs_fasta_path)
 
+        contigs_db = dbops.ContigsDatabase(self.contigs_db_path)
+        contigs_basic_info = contigs_db.db.get_table_as_dict(t.contigs_info_table_name, string_the_key=True)
+
         # filter search results and generate a long_read_commons dict
-        connections = self.gen_connections(BLAST_results)
+        connections = self.gen_connections(BLAST_results, contigs_basic_info)
 
         # populate the table
         table_for_contig_links = contiglinks.TableForContigLinks(self.contigs_db_path)
         table_for_contig_links.populate_contig_links('test', connections)
 
-        self.run.info('log file', self.run.log_file_path)
         self.run.quit()
 
 
