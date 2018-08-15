@@ -52,6 +52,7 @@ class MetagenomeCentricGeneClassifier:
         A = lambda x: args.__dict__[x] if x in args.__dict__ else None
         self.output_file_prefix = A('output_file_prefix')
         self.alpha = A('alpha')
+        self.beta = A('beta')
         self.collection_name = A('collection_name')
         self.bin_id = A('bin_id')
         self.bin_ids_file_path = A('bin_ids_file')
@@ -231,8 +232,15 @@ class MetagenomeCentricGeneClassifier:
                 self.run.info_single('The number of non-outliers is %s of %s (%.2f%%)' % (number_of_non_outliers, total_length, 100.0 * number_of_non_outliers / total_length))
             detection[sample] = np.count_nonzero(self.coverage_values_per_nt[sample]) / total_length
             samples_information['presence'][sample] = get_presence_absence_information(number_of_non_outliers/total_length, self.alpha)
+            mean_to_std_ratio = lambda s: self.samples_coverage_stats_dicts['non_outlier_coverage_std'][s] / self.samples_coverage_stats_dicts['non_outlier_mean_coverage'][s]
+
+            if mean_to_std_ratio(sample) > self.beta:
+                # if the std is high relative to the mean, then let's not trust this sample
+                samples_information['presence'][sample] = None
+
             if detection[sample] <= 0.5:
                 samples_information['presence'][sample] = False
+
             if samples_information['presence'][sample]:
                 positive_samples.append(sample)
             elif samples_information['presence'][sample] == False:
