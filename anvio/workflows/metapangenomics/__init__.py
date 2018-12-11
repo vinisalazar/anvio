@@ -61,3 +61,15 @@ class MetaPangenomicsWorkflow(MetagenomicsWorkflow, PangenomicsWorkflow, Contigs
                                "MERGE_DIR": "06_MERGED"})
 
         self.default_config.update({'metapangenome_fastas_txt': 'metapangenome-fastas.txt'})
+
+
+    def get_fasta:
+        # get_fasta is used when we want the fasta file that we will use
+        # for things like anvi-gen-contigs-database and bowtie-build
+        # hence we want the merged fasta file
+
+
+    def get_raw_fasta
+        # get_raw_fasta is only used for reformat fasta
+        # in metapangenomics we want to reformat the individual fasta
+        # separately and only then merge them
