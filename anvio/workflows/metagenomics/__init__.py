@@ -177,13 +177,23 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
         elif self.run_split:
             raise ConfigError('If you want to run anvi-split you must provide a collections_txt file')
 
+        self.init_samples_txt()
+        self.init_kraken()
+        self.init_refereces_txt()
         self.init_target_files()
 
 
     def init_target_files(self):
         target_files = []
-        merged_profiles = [os.path.join(self.dirs_dict["MERGE_DIR"], g, "PROFILE.db") for g in self.group_names]
+        # We only merge things if there are multiple samples in the same group
+        merged_profiles = [os.path.join(self.dirs_dict["MERGE_DIR"], g, "PROFILE.db") \
+                            for g in self.group_names if self.group_sizes[g] > 1]
         target_files.extend(merged_profiles)
+
+        # for groups of size 1 we create a message file
+        message_file_for_groups_of_size_1 = [os.path.join(self.dirs_dict["MERGE_DIR"], g, "README.txt") \
+                            for g in self.group_names if self.group_sizes[g] == 1]
+        target_files.extend(message_file_for_groups_of_size_1)
 
         contigs_annotated = [os.path.join(self.dirs_dict["CONTIGS_DIR"],\
                              g + "-annotate_contigs_database.done") for g in self.group_names]
@@ -218,13 +228,8 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
         self.target_files.extend(target_files)
 
 
-    def sanity_checks(self):
-        self.sanity_check_for_samples_txt()
-        self.sanity_check_for_kraken()
-        self.sanity_check_for_refereces_txt()
 
-
-    def sanity_check_for_refereces_txt(self):
+    def init_refereces_txt(self):
         if self.references_mode:
             try:
                 filesnpaths.is_file_exists(self.fasta_txt_file)
@@ -303,7 +308,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                 please change your config.json file")
 
 
-    def sanity_check_for_samples_txt(self):
+    def init_samples_txt(self):
         if 'sample' not in self.samples_information.columns.values:
             raise ConfigError("You know what. This '%s' file does not look anything like\
                                a samples file." % self.samples_txt_file)
@@ -323,7 +328,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                accordingly. These are the file names we don't like: %s" % (self.samples_txt_file, ', '.join(bad_fastq_names)))
 
 
-    def sanity_check_for_kraken(self):
+    def init_kraken(self):
         '''Making sure the sample names and file paths the provided kraken.txt file are valid'''
         kraken_txt = self.get_param_value_from_config('kraken_txt')
         self.run_krakenhll = self.get_param_value_from_config(['krakenhll', 'run']) == True
