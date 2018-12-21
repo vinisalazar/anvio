@@ -998,9 +998,10 @@ class PanSuperclass(object):
                                Here are some of the missing ones; %s" \
                                         % (len(missing_gene_cluster_names), len(gene_cluster_names), ', '.join(missing_gene_cluster_names[0:5])))
 
-        self.progress.new('Accessing gene cluster seqeunces')
+        self.progress.new('Accessing gene cluster seqeunces', progress_total_items=len(gene_cluster_names))
 
         for gene_cluster_name in gene_cluster_names:
+            self.progress.increment()
             self.progress.update("processing '%s' ..." % gene_cluster_name )
             sequences[gene_cluster_name] = {}
             for genome_name in gene_clusters_dict[gene_cluster_name]:
@@ -1035,7 +1036,7 @@ class PanSuperclass(object):
 
         homogeneity_calculator = homogeneityindex.HomogeneityCalculator(quick_homogeneity=self.args.quick_homogeneity)
 
-        self.progress.new('Computing gene cluster homogeneity indices')
+        self.progress.new('Computing gene cluster homogeneity indices', progress_total_items=len(gene_cluster_names))
         self.progress.update('Initializing %d threads...' % num_threads)
 
         manager = multiprocessing.Manager()
@@ -1062,6 +1063,7 @@ class PanSuperclass(object):
                                                                       'geometric_homogeneity_index': homogeneity_dict['geometric']}
 
                 received_gene_clusters += 1
+                self.progress.increment(increment_to=received_gene_clusters)
                 self.progress.update('Processed %d gene clusters using %d threads' % (received_gene_clusters, num_threads))
             except KeyboardInterrupt:
                 print("Recieved SIGINT, terminating all processes...")
@@ -1281,13 +1283,14 @@ class PanSuperclass(object):
         for gene_cluster in self.gene_clusters_functions_dict:
             gene_clusters_functions_summary_dict[gene_cluster] = {}
             gene_clusters_functions_summary_dict[gene_cluster]['gene_cluster_function'] = None
+            gene_clusters_functions_summary_dict[gene_cluster]['gene_cluster_function_accession'] = None
             max_votes = 0
             for genome in self.gene_clusters_functions_dict[gene_cluster]:
                 for gene_caller_id in self.gene_clusters_functions_dict[gene_cluster][genome]:
                     if functional_annotation_source in self.gene_clusters_functions_dict[gene_cluster][genome][gene_caller_id]:
                         annotation_blob = self.gene_clusters_functions_dict[gene_cluster][genome][gene_caller_id][functional_annotation_source]
                         accessions, annotations = [l.split('!!!') for l in annotation_blob.split("|||")]
-                        for f in annotations:
+                        for a,f in zip(accessions, annotations):
                             if f not in gene_clusters_functions_summary_dict[gene_cluster]:
                                 gene_clusters_functions_summary_dict[gene_cluster][f] = 0
 
@@ -1296,6 +1299,7 @@ class PanSuperclass(object):
                                 # The function has the votes!
                                 max_votes = gene_clusters_functions_summary_dict[gene_cluster][f]
                                 gene_clusters_functions_summary_dict[gene_cluster]['gene_cluster_function'] = f
+                                gene_clusters_functions_summary_dict[gene_cluster]['gene_cluster_function_accession'] = a
 
         self.progress.end()
 
