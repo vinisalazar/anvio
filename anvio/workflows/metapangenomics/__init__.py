@@ -34,12 +34,25 @@ class MetaPangenomicsWorkflow(MetagenomicsWorkflow, PangenomicsWorkflow, Contigs
         self.run = run
         self.progress = progress
 
+        # Some items from inherited workflows are not relevant in metapangenomics
+        self.config_params_to_remove = ['external_genomes', 'megahit', 'idba_ud', \
+                                        'metaspades', 'merge_fastqs_for_co_assembly', \
+                                        'merge_fastas_for_co_assembly']
+
         # know thyself.
         self.name = 'metapangenomics'
 
         # initialize the base classes
         PangenomicsWorkflow.__init__(self)
         MetagenomicsWorkflow.__init__(self)
+
+        # remove parameters that are not available for metapangenomics
+        for param in self.config_params_to_remove:
+            self.rules.clear(param)
+            try:
+                self.default_config.pop(param)
+            except:
+                pass
 
         self.rules.extend([])
 
