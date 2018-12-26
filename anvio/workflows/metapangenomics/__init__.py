@@ -37,7 +37,7 @@ class MetaPangenomicsWorkflow(MetagenomicsWorkflow, PangenomicsWorkflow, Contigs
         # Some items from inherited workflows are not relevant in metapangenomics
         self.config_params_to_remove = ['external_genomes', 'megahit', 'idba_ud', \
                                         'metaspades', 'merge_fastqs_for_co_assembly', \
-                                        'merge_fastas_for_co_assembly']
+                                        'merge_fastas_for_co_assembly', 'references_mode']
 
         # know thyself.
         self.name = 'metapangenomics'
@@ -56,7 +56,7 @@ class MetaPangenomicsWorkflow(MetagenomicsWorkflow, PangenomicsWorkflow, Contigs
 
         self.rules.extend([])
 
-        self.general_params.extend(['metapangenome_fastas_txt'])
+        self.general_params.extend([''])
 
         rule_acceptable_params_dict = {}
 
@@ -76,13 +76,18 @@ class MetaPangenomicsWorkflow(MetagenomicsWorkflow, PangenomicsWorkflow, Contigs
         self.default_config.update({'metapangenome_fastas_txt': 'metapangenome-fastas.txt'})
 
 
+    def init(self):
+        # Metapangenomics is only available for references mode of metagenomics workflow
+        self.references_mode = True
+
+
     def get_fasta:
         # get_fasta is used when we want the fasta file that we will use
         # for things like anvi-gen-contigs-database and bowtie-build
         # hence we want the merged fasta file
 
 
-    def get_raw_fasta
+        # NOTICE that we don't need to override the get_raw_fasta function
         # get_raw_fasta is only used for reformat fasta
         # in metapangenomics we want to reformat the individual fasta
-        # separately and only then merge them
+        # separately and only then merge them. And this will be done naturally
