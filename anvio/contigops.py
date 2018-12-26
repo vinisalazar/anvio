@@ -8,6 +8,7 @@ import os
 import re
 import io
 import gzip
+import string
 import argparse
 
 from Bio import SeqIO
@@ -32,6 +33,9 @@ __version__ = anvio.__version__
 __maintainer__ = "A. Murat Eren"
 __email__ = "a.murat.eren@gmail.com"
 __status__ = "Development"
+
+OK_CHARS_FOR_ORGANISM_NAME = string.ascii_letters + string.digits + '_'
+OK_CHARS_FOR_ACCESSION = OK_CHARS_FOR_ORGANISM_NAME + '.'
 
 
 variability_test_class_default = VariablityTestFactory(params={'b': 2, 'm': 1.45, 'c': 0.05})
@@ -269,13 +273,27 @@ class GenbankToAnvioWrapper:
             self.progress.increment()
             self.progress.update('Processing %s ...' % entry)
 
-            organism_name = metadata[entry]['organism_name'].replace(' ', '_').replace('-', '_')
+            # set the organism name and accession id and clean them from weird
+            # characters.
+            organism_name = metadata[entry]['organism_name']
+            for char in [c for c in organism_name if c not in OK_CHARS_FOR_ORGANISM_NAME]:
+                organism_name = organism_name.replace(char, '_')
+
+            accession_id = entry
+            for char in [c for c in accession_id if c not in OK_CHARS_FOR_ACCESSION]:
+                accession_id = accession_id.replace(char, '_')
+
+            final_name = '_'.join([organism_name, accession_id])
 
             args = argparse.Namespace(input_genbank=metadata[entry]['local_filename'],
-                                      output_file_prefix=os.path.join(self.output_directory_path, organism_name))
+                                      output_file_prefix=os.path.join(self.output_directory_path, final_name))
             g = GenbankToAnvio(args, run=terminal.Run(verbose=False), progress=terminal.Progress(verbose=False))
 
-            output_fasta_dict[organism_name] = g.process()
+            if final_name in output_fasta_dict:
+                raise ConfigError("The final name '%s' for your genome has alrady been used by\
+                                   another one :/ This should never happen unless your metadata\
+                                   contains entries with identical accession numbers...")
+            output_fasta_dict[final_name] = g.process()
 
         self.progress.end()
 
