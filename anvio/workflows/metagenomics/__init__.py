@@ -38,7 +38,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
         self.target_files = [] # TODO: Once we update all other workflows then this will be initiated in WorkflowSuperClass
         self.samples_information = {}
         self.kraken_annotation_dict = {}
-        self.run_krakenhll = None
+        self.run_krakenuniq = None
         self.run_metaspades = None
         self.use_scaffold_from_metaspades = None
         self.remove_short_reads_based_on_references = None
@@ -61,7 +61,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                      'anvi_import_taxonomy', 'anvi_run_hmms', 'anvi_run_ncbi_cogs',\
                      'bowtie_build', 'bowtie', 'samtools_view', 'anvi_init_bam', 'idba_ud',\
                      'anvi_profile', 'annotate_contigs_database', 'anvi_merge', 'import_percent_of_reads_mapped',\
-                     'krakenhll', 'krakenhll_mpa_report', 'import_kraken_hll_taxonomy', 'metaspades',\
+                     'krakenuniq', 'krakenuniq_mpa_report', 'import_krakenuniq_taxonomy', 'metaspades',\
                      'remove_short_reads_based_on_references', 'anvi_summarize', 'anvi_split'])
 
         self.general_params.extend(['samples_txt', "references_mode", "all_against_all",\
@@ -96,7 +96,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                                         "--skip-SNV-profiling", "--profile-SCVs", "--description",
                                                         "--skip-hierarchical-clustering", "--distance", "--linkage", "--min-contig-length",
                                                         "--min-mean-coverage", "--min-coverage-for-variability", "--cluster-contigs",
-                                                        "--contigs-of-interest", "--queue-size", "--write-buffer-size", "--max-contig-length"]
+                                                        "--contigs-of-interest", "--queue-size", "--write-buffer-size", "--max-contig-length", "--max-coverage-depth"]
         rule_acceptable_params_dict['annotate_contigs_database'] = []
         rule_acceptable_params_dict['merge_fastas_for_co_assembly'] = []
         rule_acceptable_params_dict['merge_fastqs_for_co_assembly'] = []
@@ -104,9 +104,8 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                                      "--enforce-hierarchical-clustering", "--distance", "--linkage",
                                                      "--skip-concoct-binning", "--overwrite-output-destinations"]
         rule_acceptable_params_dict['import_percent_of_reads_mapped'] = ["run"]
-        rule_acceptable_params_dict['krakenhll'] = ["additional_params", "run", "--db", "--gzip-compressed"]
-        rule_acceptable_params_dict['krakenhll_mpa_report'] = ["additional_params"]
-        rule_acceptable_params_dict['import_kraken_hll_taxonomy'] = ["--min-abundance"]
+        rule_acceptable_params_dict['krakenuniq'] = ["additional_params", "run", "--db", "--gzip-compressed"]
+        rule_acceptable_params_dict['import_krakenuniq_taxonomy'] = ["--min-abundance"]
         rule_acceptable_params_dict['remove_short_reads_based_on_references'] = ["dont_remove_just_map", \
                                                                                  "references_for_removal_txt", \
                                                                                  "delimiter-for-iu-remove-ids-from-fastq"]
@@ -114,7 +113,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
         self.rule_acceptable_params_dict.update(rule_acceptable_params_dict)
 
         forbidden_params = {}
-        forbidden_params['krakenhll'] = ['--fastq-input', '--paired', '--output']
+        forbidden_params['krakenuniq'] = ['--fastq-input', '--paired', '--output']
 
         self.forbidden_params.update(forbidden_params)
 
@@ -139,7 +138,7 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                     "anvi_profile": {"threads": 3, "--sample-name": "{sample}", "--overwrite-output-destinations": True},
                                     "anvi_merge": {"--sample-name": "{group}", "--overwrite-output-destinations": True},
                                     "import_percent_of_reads_mapped": {"run": True},
-                                    "krakenhll": {"threads": 3, "--gzip-compressed": True, "additional_params": "--preload"},
+                                    "krakenuniq": {"threads": 3, "--gzip-compressed": True, "additional_params": ""},
                                     "remove_short_reads_based_on_references": {"delimiter-for-iu-remove-ids-from-fastq": " "}})
 
 
@@ -149,8 +148,15 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
         # loading the samples.txt file
         self.samples_txt_file = self.get_param_value_from_config(['samples_txt'])
         filesnpaths.is_file_exists(self.samples_txt_file)
-        # getting the samples information (names, [group], path to r1, path to r2) from samples.txt
-        self.samples_information = pd.read_csv(self.samples_txt_file, sep='\t', index_col=False)
+        try:
+            # getting the samples information (names, [group], path to r1, path to r2) from samples.txt
+            self.samples_information = pd.read_csv(self.samples_txt_file, sep='\t', index_col=False)
+        except IndexError as e:
+            raise ConfigError("Looks like your samples_txt file, '%s', is not properly formatted. \
+                               This is what we know: '%s'" % (self.samples_txt_file, e))
+        if 'sample' not in list(self.samples_information.columns):
+            raise ConfigError("Looks like your samples_txt file, '%s', is not properly formatted. \
+                               We are not sure what's wrong, but we can't find a column with title 'sample'." % self.samples_txt_file)
 
 
         # get a list of the sample names
@@ -208,12 +214,8 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
             target_files.append(filter_report)
 
         if self.collections:
-            import_collection_done = [os.path.join(self.dirs_dict["MERGE_DIR"],\
-                                                   g,\
-                                                   'collection-import.done')\
-                                                   for g in self.collections.keys()]
-
-            target_files.extend(import_collection_done)
+            for group in self.collections.keys():
+                target_files.append(self.get_collection_import_flag(group))
 
         if self.run_summary:
             summary = [os.path.join(self.dirs_dict["SUMMARY_DIR"], g + "-SUMMARY") for g in self.collections.keys()]
@@ -222,11 +224,20 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
         if self.run_split:
             split = [os.path.join(self.dirs_dict["SPLIT_PROFILES_DIR"],\
                                   g + "-split.done")\
-                                  for g in self.collections.keys()]
+                                  for g in self.collections.keys() if not self.collections[g]['default_collection']]
             target_files.extend(split)
 
         self.target_files.extend(target_files)
 
+
+    def get_collection_import_flag(self, group):
+        ''' Return the flag for collection import (either default collection or from file).'''
+        if not self.collections[group].get('default_collection'):
+            flag = os.path.join(self.dirs_dict["MERGE_DIR"], group, 'collection-import.done')
+        else:
+            flag = os.path.join(self.dirs_dict["MERGE_DIR"], group, 'default-collection-import.done')
+
+        return flag
 
 
     def init_refereces_txt(self):
@@ -313,12 +324,21 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
             raise ConfigError("You know what. This '%s' file does not look anything like\
                                a samples file." % self.samples_txt_file)
 
+        if len(self.samples_information['sample']) != len(set(self.samples_information['sample'])):
+            raise ConfigError("Names of samples in your samples_txt file must be unique. \
+                               It looks like some names appear twice in your file: %s" % self.samples_txt_file)
+
         for sample in self.samples_information['sample']:
             try:
                 u.check_sample_id(sample)
             except ConfigError as e:
                 raise ConfigError("While processing the samples txt file ('%s'), anvi'o ran into the following error: \
                                    %s" % (self.samples_txt_file, e))
+
+        if 'r1' not in self.samples_information.columns or 'r2' not in self.samples_information:
+            raise ConfigError("Looks like your samples_txt file, '%s', is not properly formatted. \
+                               We are not sure what's wrong, but we expected to find columns with \
+                               titles 'r1' and 'r2' and we did not find such columns." % self.samples_txt_file)
 
         fastq_file_names = list(self.samples_information['r1']) + list(self.samples_information['r2'])
         bad_fastq_names = [s for s in fastq_file_names if (not s.endswith('.fastq') and not s.endswith('.fastq.gz'))]
@@ -331,19 +351,19 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
     def init_kraken(self):
         '''Making sure the sample names and file paths the provided kraken.txt file are valid'''
         kraken_txt = self.get_param_value_from_config('kraken_txt')
-        self.run_krakenhll = self.get_param_value_from_config(['krakenhll', 'run']) == True
+        self.run_krakenuniq = self.get_param_value_from_config(['krakenuniq', 'run']) == True
 
         if kraken_txt:
-            if self.get_param_value_from_config(['krakenhll', 'run']) == True:
-                raise ConfigError("You supplied a kraken_txt file (\"%s\") but you set krakenhll \
+            if self.get_param_value_from_config(['krakenuniq', 'run']) == True:
+                raise ConfigError("You supplied a kraken_txt file (\"%s\") but you set krakenuniq \
                                    to run in the config file. anvi'o is confused and \
                                    is officially going on a strike. Ok, let's clarify, \
-                                   having a kraken_txt file means you already ran krakenhll \
-                                   and want us to use those results, and yet you set krakenhll \
+                                   having a kraken_txt file means you already ran krakenuniq \
+                                   and want us to use those results, and yet you set krakenuniq \
                                    to run again? why? Ok, time to strike. Bye!" % kraken_txt)
 
             # if a kraken_txt was supplied then let's run kraken by default
-            self.run_krakenhll = True
+            self.run_krakenuniq = True
 
             kraken_annotation_dict = u.get_TAB_delimited_file_as_dictionary(kraken_txt)
             if next(iter(next(iter(kraken_annotation_dict.values())).keys())) != "path":
@@ -367,9 +387,9 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                    Here is an example of such a sample: %s." % (kraken_txt, self.get_param_value_from_config('samples_txt'), wrong_samples_in_kraken_txt[0]))
             self.kraken_annotation_dict = kraken_annotation_dict
 
-        if self.get_param_value_from_config(['krakenhll', 'run']):
-            if not self.get_param_value_from_config(['krakenhll', '--db']):
-                raise ConfigError('In order to run krakenhll, you must provide a path to \
+        if self.get_param_value_from_config(['krakenuniq', 'run']):
+            if not self.get_param_value_from_config(['krakenuniq', '--db']):
+                raise ConfigError('In order to run krakenuniq, you must provide a path to \
                                    a database using the --db parameter in the config file.')
 
 
@@ -385,19 +405,40 @@ class MetagenomicsWorkflow(ContigsDBWorkflow, WorkflowSuperClass):
                                    And here are the group names we expect to find: \
                                    %s' % (self.collections_txt, ', '.join(bad_groups), ', '.join(self.group_names)))
         for group in collections:
-            filesnpaths.is_file_exists(collections[group]['collection_file'])
-            if not collections[group]['collection_name']:
-                raise ConfigError('You must specify a name for each collection in your collections_txt')
-            u.check_collection_name(collections[group]['collection_name'])
-            if collections[group].get('bins_info'):
-                filesnpaths.is_file_exists(collections[group]['bins_info'])
-                collections[group]['bins_info'] = '--bins-info %s' % collections[group]['bins_info']
-            else:
-                collections[group]['bins_info'] = ''
-            if collections[group].get('contigs_mode'):
-                collections[group]['contigs_mode'] = '--contigs-mode'
-            else:
+            default_collection = collections[group].get('default_collection')
+
+            if default_collection:
+                # User can specify either a default collection OR collection from file
+                not_allowed_params = {'collection_name', 'collection_file', 'bins_info', 'contigs_mode'}
+                if any([collections[group][key] for key in not_allowed_params if key in collections[group].keys()]):
+                    raise ConfigError('We encountered the following problem with your \
+                                       collections_txt file ("%s"): you can choose \
+                                       either using a default collection OR importing \
+                                       a collection from a file. Yet, for "%s", you specificy \
+                                       a default collection AND also specify some of the following \
+                                       parameters: %s.' % (self.collections_txt, group, ", ".join(not_allowed_params)))
+
+                collections[group]['collection_name'] = 'DEFAULT'
                 collections[group]['contigs_mode'] = ''
+
+            else:
+                if not filesnpaths.is_file_exists(collections[group]['collection_file'], dont_raise=True):
+                    raise ConfigError('We encountered the following problem with your \
+                                       collections_txt file ("%s"): you did not specify \
+                                       a valid collection file for "%s".' % (self.collections_txt, group))
+
+                if not collections[group]['collection_name']:
+                    raise ConfigError('You must specify a name for each collection in your collections_txt')
+                u.check_collection_name(collections[group]['collection_name'])
+                if collections[group].get('bins_info'):
+                    filesnpaths.is_file_exists(collections[group]['bins_info'])
+                    collections[group]['bins_info'] = '--bins-info %s' % collections[group]['bins_info']
+                else:
+                    collections[group]['bins_info'] = ''
+                if collections[group].get('contigs_mode'):
+                    collections[group]['contigs_mode'] = '--contigs-mode'
+                else:
+                    collections[group]['contigs_mode'] = ''
         self.collections = collections
 
 

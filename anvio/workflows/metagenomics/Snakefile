@@ -121,7 +121,7 @@ if not M.references_mode and number_of_assemblers_in_config_file!=1 :
                        if you do mean to use assembly, please set 'run: true' for one of the,\
                        following available assemblers: %s" % ', '.join(available_assemblers))
 
-ruleorder: import_percent_of_reads_mapped > import_kraken_hll_taxonomy
+ruleorder: import_percent_of_reads_mapped > import_krakenuniq_taxonomy
 
 rule metagenomics_workflow_target_rule:
     '''
@@ -792,7 +792,8 @@ rule anvi_profile:
         contigs_of_interest = M.get_rule_param("anvi_profile", "--contigs-of-interest"),
         queue_size = M.get_rule_param("anvi_profile", "--queue-size"),
         write_buffer_size = M.get_rule_param("anvi_profile", "--write-buffer-size"),
-        max_contig_length = M.get_rule_param("anvi_profile", "--max-contig-length")
+        max_contig_length = M.get_rule_param("anvi_profile", "--max-contig-length"),
+        max_coverage_depth = M.get_rule_param("anvi_profile", "--max-coverage-depth")
     threads: M.T('anvi_profile')
     resources: nodes = M.T('anvi_profile'),
     shell:
@@ -804,6 +805,7 @@ rule anvi_profile:
                              {params.skip_SNV_profiling} {params.description} \
                              {params.skip_hierarchical_clustering} {params.distance} \
                              {params.linkage} {params.min_mean_coverage} \
+                             {params.max_coverage_depth} \
                              {params.min_coverage_for_variability} {params.contigs_of_interest} \
                              {params.queue_size} {params.write_buffer_size} {params.max_contig_length} >> {log} 2>&1
         """
@@ -892,7 +894,7 @@ rule gen_readme_file_for_unmerged_groups:
         contigs = ancient(dirs_dict["CONTIGS_DIR"] + "/{group}-contigs.db"),
         profiles = input_for_anvi_merge,
         percent_of_reads_mapped_imported_flag = lambda wildcards: configure_flag_files_for_anvi_merge_optional_inputs(wildcards, 'import_percent_of_reads_mapped.done', run_import_percent_of_reads_mapped),
-        kraken_flag = lambda wildcards: configure_flag_files_for_anvi_merge_optional_inputs(wildcards, "import_kraken_hll_taxonomy.done", M.run_krakenhll)
+        kraken_flag = lambda wildcards: configure_flag_files_for_anvi_merge_optional_inputs(wildcards, "import_krakenuniq_taxonomy.done", M.run_krakenuniq)
     output: os.path.join(M.dirs_dict["MERGE_DIR"], "{group}", "README.txt")
     params:
     threads: w.T(config, 'gen_readme_file_for_unmerged_groups', 1)
@@ -924,7 +926,7 @@ rule anvi_merge:
         contigs = ancient(dirs_dict["CONTIGS_DIR"] + "/{group}-contigs.db"),
         profiles = input_for_anvi_merge,
         percent_of_reads_mapped_imported_flag = lambda wildcards: configure_flag_files_for_anvi_merge_optional_inputs(wildcards, 'import_percent_of_reads_mapped.done', run_import_percent_of_reads_mapped),
-        kraken_flag = lambda wildcards: configure_flag_files_for_anvi_merge_optional_inputs(wildcards, "import_kraken_hll_taxonomy.done", M.run_krakenhll)
+        kraken_flag = lambda wildcards: configure_flag_files_for_anvi_merge_optional_inputs(wildcards, "import_krakenuniq_taxonomy.done", M.run_krakenuniq)
     output:
         profile = dirs_dict["MERGE_DIR"] + "/{group}/PROFILE.db",
         AUXILIARY_DATA = dirs_dict["MERGE_DIR"] + "/{group}/AUXILIARY-DATA.db",
@@ -1034,15 +1036,32 @@ rule anvi_import_collection:
         """
 
 
+rule anvi_import_default_collection:
+    version: 1.0
+    log: dirs_dict["LOGS_DIR"] + "/{group}-anvi_import_default_collection.log"
+    input:
+        profile = dirs_dict["MERGE_DIR"] + "/{group}/PROFILE.db",
+        contigs = ancient(dirs_dict["CONTIGS_DIR"] + "/{group}-contigs.db"),
+    output:
+        imported_collection_flag = touch(os.path.join(dirs_dict["MERGE_DIR"], \
+                                              '{group}', \
+                                              'default-collection-import.done'))
+    threads: 1
+    resources: nodes=1
+    shell:
+        """
+           anvi-script-add-default-collection -p {input.profile} \
+                                              -c {input.contigs} >> {log} 2>&1
+        """
+
+
 rule anvi_summarize:
     version: 1.0
     log: os.path.join(dirs_dict["LOGS_DIR"], "{group}-anvi_summarize.log")
     input:
         profile = dirs_dict["MERGE_DIR"] + "/{group}/PROFILE.db",
         contigs = ancient(dirs_dict["CONTIGS_DIR"] + "/{group}-contigs.db"),
-        imported_collection_flag = os.path.join(dirs_dict["MERGE_DIR"], \
-                                                '{group}', \
-                                                'collection-import.done')
+        imported_collection_flag = lambda wildcards: M.get_collection_import_flag(str(wildcards.group))
     output:
         summary_done = temp(touch(os.path.join(dirs_dict["SUMMARY_DIR"], "{group}-summary.touch")))
     params:
@@ -1101,60 +1120,61 @@ rule dummy_rule_for_anvi_summarize:
     shell: "mv {params.summary_temp_dir} {output} >> {log} 2>&1"
 
 
-rule krakenhll:
+rule krakenuniq:
     version: 1.0
-    log: dirs_dict["LOGS_DIR"] + "/{sample}-krakenhll.log"
+    log: dirs_dict["LOGS_DIR"] + "/{sample}-krakenuniq.log"
     input: unpack(lambda wildcards: get_fastq(wildcards.sample))
-    output: os.path.join(dirs_dict["TAXONOMY_DIR"], "KRAKEN_HLL", "{sample}.krakenhll")
+    output:
+        raw = os.path.join(dirs_dict["TAXONOMY_DIR"], "{sample}.krakenuniq"),
+        tsv = os.path.join(dirs_dict["TAXONOMY_DIR"], "{sample}-krakenuniq-report.tsv")
     params:
-        db = M.get_rule_param("krakenhll", "--db"),
-        gzip_compressed = M.get_rule_param("krakenhll", "--gzip-compressed"),
-        additional_params = M.get_param_value_from_config(["krakenhll", "additional_params"])
-    threads: M.T('krakenhll')
-    resources: nodes = M.T('krakenhll')
+        db = M.get_rule_param("krakenuniq", "--db"),
+        gzip_compressed = M.get_rule_param("krakenuniq", "--gzip-compressed"),
+        additional_params = M.get_param_value_from_config(["krakenuniq", "additional_params"])
+    threads: M.T('krakenuniq')
+    resources: nodes = M.T('krakenuniq')
     shell:
         """
-            krakenhll \
+            krakenuniq \
                      {params.db} \
                      --threads {threads} \
                      --fastq-input \
                      {params.gzip_compressed} \
                      --paired \
-                     --output {output} \
+                     --output {output.raw} \
+                     --report-file {output.tsv} \
                      {input.r1} \
                      {input.r2} \
                      {params.additional_params} >> {log} 2>&1
         """
 
-
-rule krakenhll_mpa_report:
+rule krakenuniq_mpa_report:
     version: 1.0
-    log: dirs_dict["LOGS_DIR"] + "/{sample}-krakenhll_mpa_report.log"
-    input: os.path.join(dirs_dict["TAXONOMY_DIR"], "KRAKEN_HLL", "{sample}.krakenhll")
-    # TODO: do we need to keep the krakenhll_tax files or should they be temp files?
-    # If we don't keep them, then we can just get rid of the TAXONOMY_DIR and make this into a shadow rule
-    output: os.path.join(dirs_dict["TAXONOMY_DIR"], "KRAKEN_HLL", "{sample}.krakenhll_tax")
-    # FIXME: I need to see if more params should be available for krakenhll_mpa_report
-    params: db = M.get_rule_param("krakenhll", "--db")
-    threads: M.T('krakenhll_mpa_report')
-    resources: nodes = M.T('krakenhll_mpa_report')
+    log: dirs_dict["LOGS_DIR"] + "/{sample}-krakenuniq_mpa_report.log"
+    input: os.path.join(dirs_dict["TAXONOMY_DIR"], "{sample}.krakenuniq"),
+    output: os.path.join(dirs_dict["TAXONOMY_DIR"], "{sample}-krakenuniq.tsv")
+    # FIXME: I need to see if more params should be available for krakenuniq_mpa_report
+    params: db = M.get_rule_param("krakenuniq", "--db")
+    threads: M.T('krakenuniq_mpa_report')
+    resources: nodes = M.T('krakenuniq_mpa_report')
     shell:
         """
-            krakenhll-mpa-report {params.db} \
-                                 --header-line {input} \
-                                 > {output} 2 > {log}
+            krakenuniq-mpa-report {params.db} \
+                                  --header-line \
+                                  {input} \
+                                  > {output} 2> {log}
         """
 
 
-def input_for_import_kraken_hll_taxonomy(wildcards):
+def input_for_import_krakenuniq_taxonomy(wildcards):
     ''' configure input for import_percent_of_reads_mapped.'''
     D = {}
     if M.kraken_annotation_dict:
         # if the user supplied a file with kraken annotations then use it
-        D['krakenhll_tax'] = M.kraken_annotation_dict[wildcards.sample]['path']
+        D['tsv'] = M.kraken_annotation_dict[wildcards.sample]['path']
     else:
         # if the user didn't provide a file, then annotation needs to run
-        D['krakenhll_tax'] = os.path.join(dirs_dict["TAXONOMY_DIR"], "KRAKEN_HLL", wildcards.sample + ".krakenhll_tax")
+        D['tsv'] = os.path.join(dirs_dict["TAXONOMY_DIR"], wildcards.sample + "-krakenuniq.tsv")
 
     if run_import_percent_of_reads_mapped:
         # we include percent_of_reads_mapped_imported_flag as input here so that kraken and import_percent_of_reads_mapped will never run in parallel.
@@ -1163,21 +1183,21 @@ def input_for_import_kraken_hll_taxonomy(wildcards):
     return D
 
 
-rule import_kraken_hll_taxonomy:
+rule import_krakenuniq_taxonomy:
     version: 1.0
-    log: dirs_dict["LOGS_DIR"] + "/{group}-{sample}-import_kraken_hll_taxonomy.log"
+    log: dirs_dict["LOGS_DIR"] + "/{group}-{sample}-import_krakenuniq_taxonomy.log"
     input:
-        unpack(input_for_import_kraken_hll_taxonomy),
+        unpack(input_for_import_krakenuniq_taxonomy),
         profile = ancient(os.path.join(dirs_dict["PROFILE_DIR"], "{group}", "{sample}", "PROFILE.db"))
-    output: touch(os.path.join(dirs_dict["PROFILE_DIR"], "{group}/{sample}/import_kraken_hll_taxonomy.done"))
-    params: min_abundance = M.get_rule_param('import_kraken_hll_taxonomy', '--min-abundance')
-    threads: M.T('import_kraken_hll_taxonomy')
-    resources: nodes = M.T('import_kraken_hll_taxonomy')
+    output: touch(os.path.join(dirs_dict["PROFILE_DIR"], "{group}/{sample}/import_krakenuniq_taxonomy.done"))
+    params: min_abundance = M.get_rule_param('import_krakenuniq_taxonomy', '--min-abundance')
+    threads: M.T('import_krakenuniq_taxonomy')
+    resources: nodes = M.T('import_krakenuniq_taxonomy')
     shell:
         """
             anvi-import-taxonomy-for-layers -p {input.profile} \
-                                            -i {input.krakenhll_tax} \
-                                            --parser kraken_hll \
+                                            -i {input.tsv} \
+                                            --parser krakenuniq \
                                             {params.min_abundance} >> {log} 2>&1
         """
 
@@ -1198,17 +1218,12 @@ rule import_percent_of_reads_mapped:
     resources: nodes = M.T('import_percent_of_reads_mapped')
     run:
         if not filesnpaths.is_file_exists(params.bowtie_log, dont_raise=True):
-            run.warning('We expected to find the log file for bowtie here: %s\
+            raise ConfigError('We expected to find the log file for bowtie2 here: %s\
                          but it is not there. This means we can\'t find out what \
                          percentage of short reads mapped to the fasta file. \
                          If you are confused, feel free to contact us. \
-                         This file will still be created: %s, but don\'t let \
-                         it fool you, nothing was really imported.' % (params.bowtie_log, output.flag))
-            for f in output:
-                # creating fake output files for the rule
-                # this is done just so snakemake thinks that this rule
-                # was executed succesfully.
-                shell("touch %s" %f)
+                         To avoid this error you can skip this step by setting the "run" parameter for this rule \
+                         (import_percent_of_reads_mapped) to "false" in your config file.' % params.bowtie_log)
 
         else:
             shell("""

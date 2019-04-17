@@ -11,6 +11,7 @@ import os
 import re
 import io
 import sys
+import math
 import copy
 import time
 import json
@@ -70,16 +71,16 @@ class BottleApplication(Bottle):
             self.browser_path = A('browser_path')
             self.export_svg = A('export_svg')
             self.server_only = A('server_only')
+            self.user_server_shutdown = A('user_server_shutdown')
+            self.password_protected = A('password_protected')
+            self.password = ''
+            self.authentication_secret = ''
+            if self.password_protected:
+                print('')
+                self.password = getpass.getpass('Enter password to secure interactive interface: ').encode('utf-8')
+                salt = 'using_md5_in_2018_'.encode('utf-8')
 
-        self.password_protected = A('password_protected')
-        self.password = ''
-        self.authentication_secret = ''
-        if self.password_protected:
-            print('')
-            self.password = getpass.getpass('Enter password to secure interactive interface: ').encode('utf-8')
-            salt = 'using_md5_in_2018_'.encode('utf-8')
-
-            self.authentication_secret = md5(salt + self.password).hexdigest()
+                self.authentication_secret = md5(salt + self.password).hexdigest()
 
         self.session_id = random.randint(0,9999999999)
         self.static_dir = os.path.join(os.path.dirname(utils.__file__), 'data/interactive')
@@ -124,6 +125,7 @@ class BottleApplication(Bottle):
     def register_routes(self):
         self.route('/',                                        callback=self.redirect_to_app)
         self.route('/app/:filename#.*#',                       callback=self.send_static)
+        self.route('/app/shutdown',                            callback=self.server_shutdown)
         self.route('/data/news',                               callback=self.get_news)
         self.route('/data/<name>',                             callback=self.send_data)
         self.route('/data/view/<view_id>',                     callback=self.get_view_data)
@@ -161,6 +163,7 @@ class BottleApplication(Bottle):
         self.route('/data/reroot_tree',                        callback=self.reroot_tree, method='POST')
         self.route('/data/save_tree',                          callback=self.save_tree, method='POST')
         self.route('/data/check_homogeneity_info',             callback=self.check_homogeneity_info, method='POST')
+        self.route('/data/search_items',                       callback=self.search_items_by_name, method='POST')
 
 
     def run_application(self, ip, port):
@@ -204,6 +207,8 @@ class BottleApplication(Bottle):
             homepage = 'contigs.html'
         elif self.interactive.mode == 'structure':
             homepage = 'structure.html'
+        elif self.interactive.mode == 'inspect':
+            redirect('/app/charts.html?id=%s&rand=%s' % (self.interactive.inspect_split_name, self.random_hash(8)))
 
         redirect('/app/%s?rand=%s' % (homepage, self.random_hash(8)))
 
@@ -240,6 +245,14 @@ class BottleApplication(Bottle):
             ret.headers['Content-Length'] = buff.getbuffer().nbytes
 
         return ret
+
+
+    def server_shutdown(self, **kwd):
+        if self.user_server_shutdown:
+            run.info_single('User Requested shutdown via web.', nl_after=1)
+            # Could do sys.exit(0) instead, but raising KeyboardInterrupt will force consistent shutdown process
+            raise KeyboardInterrupt
+        return json.dumps({'error': "The server cannot be shutdown by a web user.", 'status_code': 0})
 
 
     def get_news(self):
@@ -348,7 +361,9 @@ class BottleApplication(Bottle):
                                  "functions_initialized":              self.interactive.gene_function_calls_initiated,
                                  "functions_sources":                  functions_sources,
                                  "state":                              (self.interactive.state_autoload, state_dict),
-                                 "collection":                         collection_dict })
+                                 "collection":                         collection_dict,
+                                 "samples":                            self.interactive.p_meta['samples'] if self.interactive.mode in ['full', 'refine'] else [],
+                                 "load_full_state":                    self.interactive.load_full_state })
 
         elif name == "session_id":
             return json.dumps(self.session_id)
@@ -449,6 +464,8 @@ class BottleApplication(Bottle):
 
     def charts(self, order_name, item_name):
         title = None
+        state = {}
+
         if self.interactive.mode == 'gene':
             split_name = self.interactive.gene_callers_id_to_split_name_dict[int(item_name)]
             title = "Gene '%d' in split '%s'" % (int(item_name), split_name)
@@ -456,7 +473,8 @@ class BottleApplication(Bottle):
             split_name = item_name
             title = split_name
 
-        state = json.loads(request.forms.get('state'))
+        if self.interactive.mode == 'inspect':
+            order_name = 'alphabetical'
 
         data = {'layers': [],
                  'title': title,
@@ -468,7 +486,8 @@ class BottleApplication(Bottle):
                  'previous_contig_name': None,
                  'next_contig_name': None,
                  'genes': [],
-                 'outlier_SNVs_shown': not self.args.hide_outlier_SNVs}
+                 'outlier_SNVs_shown': not self.args.hide_outlier_SNVs,
+                 'state': {}}
 
         if split_name not in self.interactive.split_names:
             return data
@@ -478,7 +497,26 @@ class BottleApplication(Bottle):
 
         data['index'], data['total'], data['previous_contig_name'], data['next_contig_name'] = self.get_index_total_previous_and_next_items(order_name, item_name)
 
-        layers = [layer for layer in sorted(self.interactive.p_meta['samples']) if (layer not in state['layers'] or float(state['layers'][layer]['height']) > 0)]
+        if self.interactive.mode == 'inspect':
+            if self.interactive.state_autoload:
+                state = json.loads(self.interactive.states_table.states[self.interactive.state_autoload]['content'])
+                layers = [layer for layer in sorted(self.interactive.p_meta['samples']) if (layer not in state['layers'] or float(state['layers'][layer]['height']) > 0)]    
+            else:
+                layers = [layer for layer in sorted(self.interactive.p_meta['samples'])]
+
+                # anvi-inspect is called so there is no state stored in localstorage written by main anvio plot
+                # and there is no default state in the database, we are going to generate a mock state.
+                # only the keys we need is enough. 
+                state['layer-order'] = layers
+                state['layers'] = {}
+                for layer in layers:
+                    state['layers'][layer] = {'height': 1, 'color': '#00000'}
+
+        else:
+            state = json.loads(request.forms.get('state'))
+            layers = [layer for layer in sorted(self.interactive.p_meta['samples']) if (layer not in state['layers'] or float(state['layers'][layer]['height']) > 0)]
+
+        data['state'] = state
 
         try:
             auxiliary_coverages_db = auxiliarydataops.AuxiliaryDataForSplitCoverages(self.interactive.auxiliary_data_path,
@@ -546,6 +584,36 @@ class BottleApplication(Bottle):
         return json.dumps(data)
 
 
+    def search_items_by_name(self):
+        items_per_page = 30
+
+        query = request.forms.get('search-query')
+        page = int(request.forms.get('page') or 0)
+
+        if query and len(query) > 0:
+            query = query.lower()
+            results = []
+            for name in self.interactive.displayed_item_names_ordered:
+                if query in name.lower():
+                    results.append(name)
+        else:
+            results = self.interactive.displayed_item_names_ordered
+
+        page_start = max(0, page * items_per_page)
+        page_end = min(len(results), (page + 1) * items_per_page)
+
+        total_page = math.ceil(len(results) / items_per_page)
+
+        results = results[page_start:page_end]
+
+        return json.dumps({
+            'search-query': query,
+            'results': results,
+            'page': page,
+            'total_page': total_page
+            })
+
+
     def charts_for_single_gene(self, order_name, item_name):
         gene_callers_id = int(item_name)
         split_name = self.interactive.gene_callers_id_to_split_name_dict[gene_callers_id]
@@ -564,7 +632,8 @@ class BottleApplication(Bottle):
                  'previous_contig_name': None,
                  'next_contig_name': None,
                  'genes': [],
-                 'outlier_SNVs_shown': not self.args.hide_outlier_SNVs}
+                 'outlier_SNVs_shown': not self.args.hide_outlier_SNVs,
+                 'state': state}
 
         data['index'], data['total'], data['previous_contig_name'], data['next_contig_name'] = self.get_index_total_previous_and_next_items(order_name, str(gene_callers_id))
 
@@ -703,7 +772,7 @@ class BottleApplication(Bottle):
 
     def completeness(self):
         completeness_sources = {}
-        completeness_averages = {}
+        completeness_data = {}
         if not self.interactive.completeness:
             return json.dumps(completeness_sources)
 
@@ -712,7 +781,7 @@ class BottleApplication(Bottle):
 
         run.info_single('Completeness info has been requested for %d splits in %s' % (len(split_names), bin_name))
 
-        p_completion, p_redundancy, scg_domain, domain_confidence, results_dict = self.interactive.completeness.get_info_for_splits(set(split_names))
+        p_completion, p_redundancy, scg_domain, domain_probabilities, info_text, results_dict = self.interactive.completeness.get_info_for_splits(set(split_names))
 
         # convert results_dict (where domains are the highest order items) into a dict that is compatible with the
         # previous format of the dict (where hmm scg source names are the higher order items).
@@ -720,12 +789,14 @@ class BottleApplication(Bottle):
             for source in results_dict[domain]:
                 completeness_sources[source] = results_dict[domain][source]
 
-        completeness_averages['percent_completion'] = p_completion
-        completeness_averages['percent_redundancy'] = p_redundancy
-        completeness_averages['domain'] = scg_domain
-        completeness_averages['domain_confidence'] = domain_confidence
+        completeness_data['percent_completion'] = p_completion
+        completeness_data['percent_redundancy'] = p_redundancy
+        completeness_data['domain'] = scg_domain
+        completeness_data['info_text'] = info_text
+        completeness_data['domain_probabilities'] = domain_probabilities
 
-        return json.dumps({'stats': completeness_sources, 'averages': completeness_averages, 'refs': self.interactive.completeness.http_refs})
+        # FIXME: We need to look into what we are sending and sort out what needs to be shown:
+        return json.dumps({'stats': completeness_sources, 'averages': completeness_data, 'refs': self.interactive.completeness.http_refs})
 
 
     def get_collections(self):
@@ -1182,7 +1253,8 @@ class BottleApplication(Bottle):
         try:
             return json.dumps({'status': 0,
                                'functional_homogeneity_info_is_available': self.interactive.functional_homogeneity_info_is_available,
-                               'geometric_homogeneity_info_is_available': self.interactive.geometric_homogeneity_info_is_available})
+                               'geometric_homogeneity_info_is_available': self.interactive.geometric_homogeneity_info_is_available,
+                               'combined_homogeneity_info_is_available': self.interactive.combined_homogeneity_info_is_available})
         except:
             return json.dumps({'status': 1})
 
@@ -1206,6 +1278,6 @@ class BottleApplication(Bottle):
         new_newick = tree.write(format=1)
 
         # ete also converts base32 padding charachter "=" to "_" so we need to replace it.
-        new_newick = re.sub(r"base32(\w+)", lambda m: base64.b32decode(m.group(1).replace('_','=')).decode('utf-8'), new_newick)
+        new_newick = re.sub(r"base32(\w*)", lambda m: base64.b32decode(m.group(1).replace('_','=')).decode('utf-8'), new_newick)
 
         return json.dumps({'newick': new_newick})

@@ -87,6 +87,7 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
         self.show_states = A('show_states')
         self.skip_check_names = A('skip_check_names')
         self.list_collections = A('list_collections')
+        self.load_full_state = A('load_full_state')
         self.distance = A('distance') or constants.distance_metric_default
         self.linkage = A('linkage') or constants.linkage_method_default
         self.skip_init_functions = A('skip_init_functions')
@@ -95,10 +96,14 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
         self.bin_id = A('bin_id')
         self.collection_name = A('collection_name')
         self.gene_mode = A('gene_mode')
+        self.inspect_split_name = A('split_name')
 
         if self.pan_db_path and self.profile_db_path:
             raise ConfigError("You can't set both a profile database and a pan database in arguments\
                                 you send to this class. What are you doing?")
+
+        if self.profile_db_path and filesnpaths.is_file_exists(self.profile_db_path, dont_raise=True):
+            utils.is_profile_db(self.profile_db_path)
 
         if self.additional_layers_path:
             filesnpaths.is_file_tab_delimited(self.additional_layers_path)
@@ -201,6 +206,9 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
             self.load_collection_mode()
         elif self.mode == 'full':
             self.load_full_mode()
+        elif self.mode == 'inspect':
+            self.load_full_mode()
+            self.load_inspect_mode()
         else:
             raise ConfigError("The interactive class is called with a mode that no one knows anything \
                                about. '%s'... What kind of a mode is that anyway :/" % self.mode)
@@ -261,7 +269,11 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
 
         # self.displayed_item_names_ordered is going to be the 'master' names list. everything else is going to
         # need to match these names:
-        default_item_order = self.p_meta['item_orders'][self.p_meta['default_item_order']]
+        if self.p_meta['default_item_order']:
+            default_item_order = self.p_meta['item_orders'][self.p_meta['default_item_order']]
+        else:
+            default_item_order = self.p_meta['item_orders'][self.p_meta['available_item_orders'][0]]
+
         if default_item_order['type'] == 'newick':
             self.displayed_item_names_ordered = utils.get_names_order_from_newick_tree(default_item_order['data'], reverse=True)
         elif default_item_order['type'] == 'basic':
@@ -669,6 +681,19 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
         return clusterings
 
 
+    def load_inspect_mode(self):
+        self.displayed_item_names_ordered = sorted(self.views[self.default_view]['dict'].keys())
+        alphabetical_order = {'type': 'basic', 'data': sorted(self.displayed_item_names_ordered[::])}
+        self.p_meta['item_orders']['alphabetical'] = alphabetical_order
+        self.p_meta['available_item_orders'].append('alphabetical')
+
+        if not self.inspect_split_name or self.inspect_split_name not in self.displayed_item_names_ordered:
+            self.inspect_split_name = alphabetical_order['data'][0]
+            self.run.warning("Either you forgot to provide split name to inspect or the split name\
+                             you have provided does not exist. So anvi'o decided to show you the split: \
+                             %s" % self.inspect_split_name)
+
+
     def load_refine_mode(self):
         self.split_names_of_interest = set([])
         self.is_merged = self.p_meta['merged']
@@ -796,7 +821,7 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
             # clustering is done, we can get prepared for the expansion of the view dict
             # with new layers. Note that these layers are going to be filled later.
             if completion_redundancy_available:
-                d['header'].extend(['percent_completion', 'percent_redundancy'])
+                d['header'].extend(['percent_completion', 'percent_redundancy', 'matching_domain'])
             d['header'].extend(['bin_name', 'source'])
 
             views_for_collection[view] = d
@@ -826,14 +851,17 @@ class Interactive(ProfileSuperclass, PanSuperclass, ContigsSuperclass):
 
             if completion_redundancy_available:
                 # get completeness estimate
-                p_completion, p_redundancy, domain, domain_confidence, results_dict = completeness.get_info_for_splits(set(self.collection[bin_id]))
+                p_completion, p_redundancy, domain, domain_probabilities, info_text, _ = completeness.get_info_for_splits(set(self.collection[bin_id]))
+                domain_confidence = domain_probabilities[domain] if domain else 0.0
 
             for view in self.views:
                 self.views[view]['dict'][bin_id]['bin_name'] = bin_id
 
                 if completion_redundancy_available:
+                    matching_domain, matching_domain_confidence = sorted(domain_probabilities.items(), key = lambda x: x[1], reverse=True)[0]
                     self.views[view]['dict'][bin_id]['percent_completion'] = p_completion
                     self.views[view]['dict'][bin_id]['percent_redundancy'] = p_redundancy
+                    self.views[view]['dict'][bin_id]['matching_domain'] = '%s (%.1f)' % (matching_domain, matching_domain_confidence)
 
                 self.views[view]['dict'][bin_id]['source'] = bins_info_dict[bin_id]['source']
 
@@ -2206,12 +2234,12 @@ class ContigsInteractive():
         n_values = [c['n_values'] for c in self.contigs_stats.values()]
         N = lambda n: [n_value[n]['num_contigs'] for n_value in n_values]
         L = lambda n: [n_value[n]['length'] for n_value in n_values]
-        basic_stats.append(['N50'] + N(49))
-        basic_stats.append(['N75'] + N(74))
-        basic_stats.append(['N90'] + N(89))
-        basic_stats.append(['L50'] + L(49))
-        basic_stats.append(['L75'] + L(74))
-        basic_stats.append(['L90'] + L(89))
+        basic_stats.append(['L50'] + N(49))
+        basic_stats.append(['L75'] + N(74))
+        basic_stats.append(['L90'] + N(89))
+        basic_stats.append(['N50'] + L(49))
+        basic_stats.append(['N75'] + L(74))
+        basic_stats.append(['N90'] + L(89))
 
         self.tables['basic_stats'] = basic_stats
         self.human_readable_keys.extend([e[0] for e in basic_stats])

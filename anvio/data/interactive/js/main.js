@@ -60,6 +60,7 @@ var views = {};
 var layers = {};
 var current_view = '';
 var layer_order;
+var sample_names;
 
 var current_state_name = "";
 
@@ -71,6 +72,7 @@ var server_mode = false;
 var samples_tree_hover = false;
 var inspection_available = false;
 var sequences_available = false;
+var load_full_state = false;
 var bbox;
 
 var request_prefix = getParameterByName('request_prefix');
@@ -198,7 +200,7 @@ function initData() {
             }
 
             inspection_available = response.inspection_available;
-            if(!response.inspection_available){
+            if((mode == 'full' || mode == 'gene' || mode == 'refine') && !response.inspection_available){
                 toastr.info("Inspection of data items is not going to be available for this project.");
             }
 
@@ -272,6 +274,9 @@ function initData() {
             toggleSampleGroups();
             changeViewData(response.views[1]);
 
+            sample_names = response.samples;
+            load_full_state = response.load_full_state;
+
             if (response.state[0] && response.state[1]) {
                 processState(response.state[0], response.state[1]);
             }
@@ -333,7 +338,9 @@ function switchUserInterfaceMode(project, title) {
                     $('#min_func').attr("disabled", 'disabled');
                     $('#max_func').attr("disabled", 'disabled');
                     $('#min_geo').attr("disabled", 'disabled');
-                    $('#max_geo').attr("disabled", 'disabled');
+                    $('#max_geo').attr("disabled", 'disabled')
+                    $('#min_combined').attr("disabled", 'disabled');
+                    $('#max_combined').attr("disabled", 'disabled');
                 } else {
                     if (data['functional_homogeneity_info_is_available'] == 0){
                         $('#min_func').attr("disabled", 'disabled');
@@ -342,6 +349,10 @@ function switchUserInterfaceMode(project, title) {
                     if (data['geometric_homogeneity_info_is_available'] == 0){
                         $('#min_geo').attr("disabled", 'disabled');
                         $('#max_geo').attr("disabled", 'disabled');
+                    }
+                    if (data['combined_homogeneity_info_is_available'] == 0){
+                        $('#min_combined').attr("disabled", 'disabled');
+                        $('#max_combined').attr("disabled", 'disabled');
                     }
                 }
             }
@@ -542,22 +553,26 @@ function populateColorDicts() {
         if (layer_types[layer_id] == 2) {
             if (!(layer_id in categorical_data_colors))
             {
-                categorical_stats[layer_id] = {};
                 categorical_data_colors[layer_id] = {};
-                for (var i=1; i < layerdata.length; i++)
-                {
-                    var _category_name = layerdata[i][layer_id];
-                    if (_category_name == null || _category_name == '' || _category_name == 'null')
-                        _category_name = 'None';
-                    layerdata[i][layer_id] = _category_name;
+            }
+            categorical_stats[layer_id] = {};
 
-                    if (typeof categorical_data_colors[layer_id][_category_name] === 'undefined'){
-                        categorical_data_colors[layer_id][_category_name]  = getNamedCategoryColor(_category_name);
-                        categorical_stats[layer_id][_category_name] = 0;
-                    }
+            for (var i=1; i < layerdata.length; i++)
+            {
+                var _category_name = layerdata[i][layer_id];
+                if (_category_name == null || _category_name == '' || _category_name == 'null')
+                    _category_name = 'None';
+                layerdata[i][layer_id] = _category_name;
 
-                    categorical_stats[layer_id][_category_name]++;
+                if (typeof categorical_data_colors[layer_id][_category_name] === 'undefined'){
+                    categorical_data_colors[layer_id][_category_name]  = getNamedCategoryColor(_category_name);
                 }
+
+                if (typeof categorical_stats[layer_id][_category_name] === 'undefined') {
+                    categorical_stats[layer_id][_category_name] = 0;
+                }
+
+                categorical_stats[layer_id][_category_name]++;
             }
         }
     }
@@ -1642,24 +1657,40 @@ function showCompleteness(bin_id, updateOnly) {
     var stats = bins.cache['completeness'][bin_id]['stats'];
     var averages = bins.cache['completeness'][bin_id]['averages'];
 
-    var title = 'Completeness of "' + $('#bin_name_' + bin_id).val() + '"';
+    var title = 'C/R for "' + $('#bin_name_' + bin_id).val() + '"';
 
     if (updateOnly && !checkObjectExists('#modal' + title.hashCode()))
         return;
 
     var msg = '<table class="table table-striped sortable">' +
-        '<thead><tr><th data-sortcolumn="0" data-sortkey="0-0">Source</th><th data-sortcolumn="1" data-sortkey="1-0">SCG domain</th><th data-sortcolumn="2" data-sortkey="2-0">Percent completion</th></tr></thead><tbody>';
+              '<thead><tr>' +
+                  '<th>&nbsp;</th>' + 
+                  '<th data-sortcolumn="1" data-sortkey="1-0">Domain</th>' + 
+                  '<th data-sortcolumn="2" data-sortkey="2-0">Domain Confidence</th>' + 
+                  '<th data-sortcolumn="3" data-sortkey="3-0">Completion</th>' + 
+                  '<th data-sortcolumn="4" data-sortkey="4-0">Redundancy</th>' + 
+              '</tr></thead><tbody>';
 
     for (let source in stats){
-        if(stats[source]['domain'] != averages['domain'])
-            // if the source is not matching the best domain recovered
-            // don't show it in the interface
-            continue;
+        msg += "<tr>";
 
-        msg += "<tr><td data-value='" + source  + "'><a href='" + refs[source] + "' class='no-link' target='_blank'>" + source + "</a></td><td data-value='" + stats[source]['domain'] + "'>" + stats[source]['domain'] + "</td><td data-value='" + stats[source]['percent_completion'] + "'>" + stats[source]['percent_completion'].toFixed(2) + "%</td></tr>";
+        if(stats[source]['domain'] == averages['domain']){
+            msg += "<td>✓</td>";
+        } else {
+            msg += "<td></td>";
+        }
+
+        msg += "<td data-value='" + stats[source]['domain'] + "'>" + stats[source]['domain'] + "</td>" +
+               "<td data-value='" + averages['domain_probabilities'][stats[source]['domain']] + "'>" + averages['domain_probabilities'][stats[source]['domain']].toFixed(2) + "</td>" +
+               "<td data-value='" + stats[source]['percent_completion'] + "'>" + stats[source]['percent_completion'].toFixed(2) + "%</td>" +
+               "<td data-value='" + stats[source]['percent_redundancy'] + "'>" + stats[source]['percent_redundancy'].toFixed(2) + "%</td>";
+
+        msg += "</tr>";
     }
 
     msg = msg + '</tbody></table>';
+
+    msg += "<hr><p>" + averages['info_text'] + "</p>";
 
     showDraggableDialog(title, msg, updateOnly);
 }
@@ -2221,6 +2252,10 @@ function processState(state_name, state) {
             views[view_key] = {};
             for (let key in state['views'][view_key])
             {
+                if (!load_full_state && mode == 'refine' && sample_names.indexOf(key) > -1) {
+                    continue;
+                }
+
                 let layer_id = getLayerId(key);
                 if (layer_id != -1)
                 {
@@ -2234,6 +2269,7 @@ function processState(state_name, state) {
         layers = {};
         for (let key in state['layers'])
         {
+            
             let layer_id = getLayerId(key);
             if (layer_id != -1)
             {
@@ -2379,6 +2415,7 @@ function processState(state_name, state) {
         $('#samples_order').val(state['samples-order']).trigger('change');
     }
 
+    populateColorDicts();
     buildLegendTables();
 
     current_state_name = state_name;
@@ -2405,4 +2442,32 @@ function restoreOriginalTree(type) {
             drawTree();
         }
     );
+}
+
+
+function shutdownServer()
+{
+    if (!confirm('Do you want to shutdown the web server?')) {
+        return;
+    }
+
+    $.ajax({
+        type: 'GET',
+        cache: false,
+        url: '/app/shutdown',
+        success: function(response) {
+            if (typeof response != 'object') {
+                response = JSON.parse(response);
+            }
+
+            if (response['status_code']==0)
+            {
+                toastr.error(response['error']);
+            }
+            else if (response['status_code']==1)
+            {
+                toastr.success("Server successfully shutdown.");
+            }
+        }
+    });
 }

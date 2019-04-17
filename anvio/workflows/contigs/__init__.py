@@ -46,7 +46,7 @@ class ContigsDBWorkflow(WorkflowSuperClass):
                            'annotate_contigs_database', 'anvi_get_sequences_for_gene_calls',
                            'emapper', 'anvi_script_run_eggnog_mapper', 'gunzip_fasta',
                            'reformat_external_gene_calls_table', 'reformat_external_functions',
-                           'import_external_functions'])
+                           'import_external_functions', 'anvi_run_pfams'])
 
         self.general_params.extend(["fasta_txt"])
 
@@ -66,6 +66,8 @@ class ContigsDBWorkflow(WorkflowSuperClass):
 
         self.rule_acceptable_params_dict['anvi_run_hmms'] = ['run', '--installed-hmm-profile', '--hmm-profile-dir']
 
+        self.rule_acceptable_params_dict['anvi_run_pfams'] = ['run', '--pfam-data-dir']
+
         self.rule_acceptable_params_dict['centrifuge'] = ['run', 'db']
 
         self.rule_acceptable_params_dict['emapper'] = ['--database', '--usemem', '--override', 'path_to_emapper_dir']
@@ -82,7 +84,7 @@ class ContigsDBWorkflow(WorkflowSuperClass):
                               '--contigs-fasta', '--project-name',\
                               '--description', '--split-length', '--kmer-size',\
                               '--skip-mindful-splitting', '--skip-gene-calling', '--external-gene-calls',\
-                              '--ignore-internal-stop-codons']
+                              '--ignore-internal-stop-codons', '--prodigal-translation-table']
 
         self.rule_acceptable_params_dict['anvi_gen_contigs_database'] = gen_contigs_params
 
@@ -106,6 +108,8 @@ class ContigsDBWorkflow(WorkflowSuperClass):
                                                 group + "-external-functions-imported.done")\
                                                 for group in self.contigs_information \
                                                 if self.contigs_information[group].get('gene_functional_annotation')]
+
+        self.run_pfams = self.get_param_value_from_config(['anvi_run_pfams', 'run'])
 
 
     def sanity_check_contigs_project_name(self):
@@ -199,6 +203,15 @@ class ContigsDBWorkflow(WorkflowSuperClass):
             return ""
 
 
+    def get_prodigal_translation_table_param(self, wildcards):
+        external_gene_calls_param = self.get_external_gene_calls_param(wildcards)
+        if external_gene_calls_param:
+            # If the user supplied external gene calls then we ignore the --prodigal-translation-table parameter
+            return ''
+        else:
+            return self.get_rule_param("anvi_gen_contigs_database", "--prodigal-translation-table")
+
+
     def get_fasta(self, wildcards):
         '''
             Define the path to the input fasta files.
@@ -215,6 +228,10 @@ class ContigsDBWorkflow(WorkflowSuperClass):
 
     def sanity_check_for_fasta_txt(self):
         """ Run sanity checks on the fasta txt file"""
+
+        for name in self.contigs_information.keys():
+            u.is_this_name_OK_for_database('fasta.txt entry name', name, stringent=True)
+
         columns = next(iter(self.contigs_information.values()))
         bad_columns = [c for c in columns if c not in w.get_fields_for_fasta_information()]
         if bad_columns:

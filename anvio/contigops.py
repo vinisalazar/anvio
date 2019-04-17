@@ -17,6 +17,7 @@ import anvio
 import anvio.tables as t
 import anvio.utils as utils
 import anvio.terminal as terminal
+import anvio.constants as constants
 import anvio.filesnpaths as filesnpaths
 
 from anvio.sequence import Coverage
@@ -86,6 +87,8 @@ class Contig:
         self.min_coverage_for_variability = 10
         self.skip_SNV_profiling = False
         self.report_variability_full = False
+        self.ignore_orphans = True
+        self.max_coverage_depth = constants.max_depth_for_coverage
         self.codon_frequencies_dict = {}
 
 
@@ -109,7 +112,9 @@ class Contig:
         counter = 1
         for split in self.splits:
             split.coverage = Coverage()
-            split.coverage.run(bam, split)
+            split.coverage.run(bam, split, 
+                            ignore_orphans=self.ignore_orphans, 
+                            max_coverage_depth=self.max_coverage_depth)
             contig_coverage.extend(split.coverage.c)
 
             counter += 1
@@ -124,7 +129,9 @@ class Contig:
                                         bam,
                                         parent_outlier_positions=self.coverage.outlier_positions,
                                         min_coverage=self.min_coverage_for_variability,
-                                        report_variability_full=self.report_variability_full)
+                                        report_variability_full=self.report_variability_full,
+                                        ignore_orphans=self.ignore_orphans,
+                                        max_coverage_depth=self.max_coverage_depth)
 
             counter += 1
 
@@ -158,7 +165,11 @@ class Split:
 
 
 class Auxiliary:
-    def __init__(self, split, bam, parent_outlier_positions, min_coverage=10, report_variability_full=False):
+    def __init__(self, split, bam, parent_outlier_positions, 
+                 min_coverage=10, 
+                 report_variability_full=False, 
+                 ignore_orphans=True,
+                 max_coverage_depth=constants.max_depth_for_coverage):
         self.v = []
         self.rep_seq = ''
         self.split = split
@@ -168,6 +179,8 @@ class Auxiliary:
         self.min_coverage = min_coverage
         self.column_profile = self.split.column_profiles
         self.report_variability_full = report_variability_full
+        self.ignore_orphans = ignore_orphans
+        self.max_coverage_depth = max_coverage_depth
 
         self.run(bam)
 
@@ -175,7 +188,9 @@ class Auxiliary:
     def run(self, bam):
         ratios = []
 
-        for pileupcolumn in bam.pileup(self.split.parent, self.split.start, self.split.end):
+        for pileupcolumn in bam.pileup(self.split.parent, self.split.start, self.split.end, 
+                                    ignore_orphans=self.ignore_orphans, max_depth=self.max_coverage_depth):
+
             pos_in_contig = pileupcolumn.pos
             if pos_in_contig < self.split.start or pos_in_contig >= self.split.end:
                 continue
@@ -231,6 +246,7 @@ class GenbankToAnvioWrapper:
         self.metadata_file_path = A('metadata')
         self.output_directory_path = os.path.abspath(A('output_dir') or os.path.curdir)
         self.output_fasta_descriptor = A('output_fasta_txt') or os.path.join(self.output_directory_path, 'fasta-input.txt')
+        self.exclude_gene_calls_from_fasta_txt = A('exclude_gene_calls_from_fasta_txt')
 
 
     def sanity_check(self):
@@ -297,7 +313,11 @@ class GenbankToAnvioWrapper:
 
         self.progress.end()
 
-        utils.store_dict_as_TAB_delimited_file(output_fasta_dict, self.output_fasta_descriptor, headers=['name', 'path', 'external_gene_calls', 'gene_functional_annotation'])
+        headers = ['name', 'path', 'gene_functional_annotation']
+        if not self.exclude_gene_calls_from_fasta_txt:
+            headers.append('external_gene_calls')
+
+        utils.store_dict_as_TAB_delimited_file(output_fasta_dict, self.output_fasta_descriptor, headers=headers)
 
         self.run.info('Output FASTA descriptor', self.output_fasta_descriptor)
 
@@ -480,15 +500,22 @@ class GenbankToAnvio:
                                        wrap_from=None)
         self.run.info('FASTA file path', self.output_fasta_path)
 
-        utils.store_dict_as_TAB_delimited_file(output_gene_calls,
-                                               self.output_gene_calls_path,
-                                               headers=["gene_callers_id", "contig", "start", "stop", "direction", "partial", "source", "version"])
-        self.run.info('External gene calls file', self.output_gene_calls_path)
+        if len(output_gene_calls):
+            utils.store_dict_as_TAB_delimited_file(output_gene_calls,
+                                                   self.output_gene_calls_path,
+                                                   headers=["gene_callers_id", "contig", "start", "stop", "direction", "partial", "source", "version"])
+            self.run.info('External gene calls file', self.output_gene_calls_path)
 
-        utils.store_dict_as_TAB_delimited_file(output_functions,
-                                               self.output_functions_path,
-                                               headers=['gene_callers_id', 'source', 'accession', 'function', 'e_value'])
-        self.run.info('TAB-delimited functions', self.output_functions_path)
+            utils.store_dict_as_TAB_delimited_file(output_functions,
+                                                   self.output_functions_path,
+                                                   headers=['gene_callers_id', 'source', 'accession', 'function', 'e_value'])
+            self.run.info('TAB-delimited functions', self.output_functions_path)
+        else:
+            self.output_gene_calls_path = None
+            self.output_functions_path = None
+            self.run.warning("Anvi'o couldn't find any gene calles in the GenBank file, hence you will get\
+                              no output files for external gene calls or functions :/ We hope you can\
+                              survive this terrible terrible news :(")
 
         self.run.info_single('Mmmmm ☘ ', nl_before=1, nl_after=1)
 

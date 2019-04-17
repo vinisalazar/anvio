@@ -304,9 +304,19 @@ class MultipleRuns:
                      ('SNVs_profiled', 'SNV profiling flags (--skip-SNV-profiling)')]:
             v = set([r[k] for r in list(self.profile_dbs_info_dict.values())])
             if len(v) > 1:
-                raise ConfigError("%s are not identical for all profiles to be merged, which is a \
-                                    deal breaker. All profiles that are going to be merged must be\
-                                    run with identical flags and parameters :/" % p)
+                if anvio.FORCE:
+                    self.run.warning("Anvio'o found out that %s is not identical across all your profiles, but since you\
+                                      have used the `--force` flag, it will continue with the merge. This is very\
+                                      dangerous, and even if merging finishes succesfully, it does not mean you can trust\
+                                      your results to be error free. We believe you are prepared to deal with potential\
+                                      implications of forcing things because you are awesome." % p, lc="cyan")
+                else:
+                    raise ConfigError("Ouch. %s are not identical for all profiles to be merged, which is a \
+                                       deal breaker. All profiles that are going to be merged must be\
+                                       run with identical flags and parameters :/ You really shouldn't but if you want to\
+                                       try to force things because you believe this is due to a misunderstanding, you can\
+                                       use the flag --force. While you are considering this as an option, please also\
+                                       remember that this we advice against it.." % p)
 
         # get split names from one of the profile databases. split names must be identical across all
         self.split_names = sorted(list(utils.get_all_item_names_from_the_database(list(self.profile_dbs_info_dict.keys())[0])))
@@ -383,13 +393,23 @@ class MultipleRuns:
         output_file_path = os.path.join(self.output_directory, 'AUXILIARY-DATA.db')
         merged_split_coverage_values = auxiliarydataops.AuxiliaryDataForSplitCoverages(output_file_path, self.contigs_db_hash, create_new=True)
 
+        AUX = lambda x: os.path.join(os.path.dirname(x), 'AUXILIARY-DATA.db')
+
+        if False in [filesnpaths.is_file_exists(AUX(p), dont_raise=True) for p in self.profile_dbs_info_dict]:
+            self.run.warning("Some of your single profile databases to be merged are missing auxiliary data files associated with them. Did you\
+                              download them from somewhere and forgot to download the AUXILIARY-DATA.db files? Well. That's fine. Anvi'o will\
+                              continue merging your profiles without split coverages (which means you will not be able to inspect nucleotide\
+                              level coverage values and some other bells and whistles). If you want, you can kill this process now with CTRL+C\
+                              and redo it with all database files in proper places.")
+
+            return None
+
         self.progress.new('Merging split coverage data')
 
         # fill coverages in from all samples
         for input_profile_db_path in self.profile_dbs_info_dict:
             self.progress.update(input_profile_db_path)
-            input_file_path = os.path.join(os.path.dirname(input_profile_db_path), 'AUXILIARY-DATA.db')
-            sample_split_coverage_values = auxiliarydataops.AuxiliaryDataForSplitCoverages(input_file_path, self.contigs_db_hash)
+            sample_split_coverage_values = auxiliarydataops.AuxiliaryDataForSplitCoverages(AUX(input_profile_db_path), self.contigs_db_hash)
 
             for split_name in self.split_names:
                 coverages_dict = sample_split_coverage_values.get(split_name)

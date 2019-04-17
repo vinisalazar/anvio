@@ -86,7 +86,6 @@ def main(args):
 
     hash_to_name = {}
     genome_names = set([])
-    summaries = {}
 
     for genome_name in genome_desc.genomes:
         genome_names.add(genome_name)
@@ -100,23 +99,18 @@ def main(args):
             collection_id = genome_desc.genomes[genome_name]['collection_id']
             profile_db_path = genome_desc.genomes[genome_name]['profile_db_path']
 
-            if not genome_name in summaries:
-                summaries[genome_name] = {}
+            class Args: None
+            summary_args = Args()
 
-            if not collection_id in summaries[genome_name]:
-                class Args: None
-                summary_args = Args()
+            summary_args.profile_db = profile_db_path
+            summary_args.contigs_db = contigs_db_path
+            summary_args.collection_name = collection_id
+            summary_args.quick = True
 
-                summary_args.profile_db = profile_db_path
-                summary_args.contigs_db = contigs_db_path
-                summary_args.collection_name = collection_id
+            summary = summarizer.ProfileSummarizer(summary_args, r=terminal.Run(verbose=False))
+            summary.init()
 
-                summary = summarizer.ProfileSummarizer(summary_args, r=terminal.Run(verbose=False))
-                summary.init()
-
-                summaries[genome_name][collection_id] = summary
-
-            bin_summary = summarizer.Bin(summaries[genome_name][collection_id], bin_id)
+            bin_summary = summarizer.Bin(summary, bin_id)
 
             with open(os.path.join(temp_dir, hash_for_output_file + '.fa'), 'w') as fasta:
                 fasta.write(bin_summary.get_bin_sequence())
@@ -209,8 +203,14 @@ def main(args):
 
     clusterings = {}
     for report_name in results:
-        clusterings[report_name] = clustering.get_newick_tree_data_for_dict(results[report_name],
-            linkage=args.linkage, distance=args.distance)
+        try:
+            clusterings[report_name] = clustering.get_newick_tree_data_for_dict(results[report_name],
+                                                                                linkage=args.linkage,
+                                                                                distance=args.distance)
+        except:
+            raise ConfigError("Bad news :/ Something went wrong while anvi'o was processing the output for\
+                               '%s'. You can find the offending file if you search for the output file in\
+                               the temporary output directory '%s'." % (report_name, os.path.join(temp_dir, 'output')))
 
     os.mkdir(args.output_dir)
     for report_name in results:
