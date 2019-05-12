@@ -35,6 +35,7 @@ import anvio.homogeneityindex as homogeneityindex
 from anvio.drivers import Aligners
 from anvio.errors import ConfigError
 from anvio.sequence import get_list_of_outliers
+from anvio.drivers.blast import BLAST
 
 from anvio.tables.tableops import Table
 from anvio.tables.states import TablesForStates
@@ -873,6 +874,33 @@ class ContigsSuperclass(object):
         output.close()
 
         self.run.info("Output", output_file_path)
+
+
+    def search_sequence(self, sequence):
+        class T(Table):
+            def __init__(self, db_path, version, run=self.run, progress=self.progress, quiet=False):
+                Table.__init__(self, db_path, version, run, progress, quiet=quiet)
+
+        work_dir = filesnpaths.get_temp_directory_path()
+        fasta_path = os.path.join(work_dir, 'fasta.fa')
+        query_path = os.path.join(work_dir, 'query.fa')
+
+
+        h = T(self.contigs_db_path, anvio.__contigs__version__)
+        h.export_sequences_table_in_db_into_FASTA_file(t.contig_sequences_table_name,
+                                                       output_file_path=fasta_path)
+
+        query_fasta = u.FastaOutput(query_path)
+        query_fasta.write_id('query')
+        query_fasta.write_seq(sequence)
+        query_fasta.close()
+
+        blast = BLAST(query_path, target_fasta=fasta_path, run=self.run, progress=self.progress, num_threads=1)
+        blast.blast()
+
+        results_dict = utils.get_BLAST_tabular_output_as_dict(blast.get_blast_results())
+
+        return results_dict
 
 
 class PanSuperclass(object):
