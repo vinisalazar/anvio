@@ -469,6 +469,9 @@ function buildSamplesTable(samples_layer_order, samples_layers) {
 
 function drawSamples() {
     $('#samples').empty();
+    
+    let samples_group = document.getElementById('samples');
+
     drawSamplesLayers(serializeSettings());
     var samples_tree = document.getElementById('samples_tree');
     if (samples_tree)
@@ -479,7 +482,12 @@ function drawSamples() {
 }
 
 
-function drawSamplesLayers(settings) {
+function drawSamplesLayers(settings, backend) {
+    backend = DRAWING_BACKEND.CANVAS;
+
+    let isCanvas = function() { return (backend == DRAWING_BACKEND.CANVAS) };
+    let context = document.getElementById('canvas').getContext('2d');
+
     for (var i = settings['samples-layer-order'].length - 1; i >= 0; i--) {
         if (!is_sample_group_visible(settings['samples-layer-order'][i]['group'])) {
             settings['samples-layer-order'].splice(i, 1);
@@ -595,7 +603,7 @@ function drawSamplesLayers(settings) {
                 var start = layer_boundaries[layer_index][0];
                 var width = layer_boundaries[layer_index][1] - layer_boundaries[layer_index][0];
 
-                var rect = drawPhylogramRectangle('samples',
+/*                var rect = drawPhylogramRectangle('samples',
                     'samples',
                     start,
                     0 - samples_layer_boundaries[i][0] - (size / 2),
@@ -607,7 +615,13 @@ function drawSamplesLayers(settings) {
 
                 rect.setAttribute('sample-name', sample_name);
                 rect.setAttribute('sample-group', group);
-                rect.setAttribute('layer-name', samples_layer_name);
+                rect.setAttribute('layer-name', samples_layer_name);*/
+                
+                context.rect(start,
+                    0 - samples_layer_boundaries[i][0] - (size / 2),
+                    size,
+                    width);
+                context.stroke();
             }
             else if (samples_layer_settings['data-type'] == 'stack-bar') 
             {
@@ -728,7 +742,7 @@ function drawSamplesLayers(settings) {
                     var start = samples_layer_boundaries[i][0];
                     var end   = samples_layer_boundaries[i][1];
 
-                    drawPhylogramRectangle('samples',
+/*                    drawPhylogramRectangle('samples',
                         'samples_background',
                         layer_boundaries[samples_start][0],
                         0 - end + (end - start) / 2,
@@ -736,7 +750,8 @@ function drawSamplesLayers(settings) {
                         layer_boundaries[samples_end][1] - layer_boundaries[samples_start][0],
                         samples_layer_settings['color'],
                         0.2,
-                        false);
+                        false);*/
+
                 }
 
                 let font_size = Math.min(samples_layer_settings['height'] / 3, parseFloat(settings['max-font-size-label']));

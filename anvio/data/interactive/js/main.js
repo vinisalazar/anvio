@@ -84,6 +84,10 @@ $(window).resize(function() {
      // get current client size
     VIEWER_WIDTH = document.getElementById('svg').clientWidth || document.getElementById('svg').width.baseVal.value;
     VIEWER_HEIGHT = document.getElementById('svg').clientHeight || document.getElementById('svg').height.baseVal.value;
+
+    let canvas = document.getElementById('canvas');
+    canvas.setAttribute('height', VIEWER_HEIGHT);
+    canvas.setAttribute('width', VIEWER_WIDTH);
 });
 
 $(document).ready(function() {

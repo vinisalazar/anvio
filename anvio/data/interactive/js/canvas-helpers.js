@@ -41,3 +41,4 @@ function createCanvas(parent, canvas_id, x, y, height, width) {
     foreignObject.appendChild(canvasBody);
     svgObject.appendChild(foreignObject);
 }
+
