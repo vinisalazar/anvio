@@ -1258,9 +1258,16 @@ class ContigSummarizer(SummarizerSuperClass):
         progress.verbose = False
         c = ContigsSuperclass(args, r=run, p=progress)
 
+        splits_of_interest = list(split_names or c.splits_basic_info.keys())
+        contigs_of_interest = list(utils.get_contigs_splits_dict(splits_of_interest, c.splits_basic_info).keys())
+
         info_dict = {'path': self.contigs_db_path,
                      'gene_caller_ids': set([]),
-                     'gene_caller': gene_caller_to_use}
+                     'gene_caller': gene_caller_to_use,
+                     'splits_of_interest': splits_of_interest,
+                     'contigs_of_interest': contigs_of_interest}
+
+
 
         for key in c.a_meta:
             info_dict[key] = c.a_meta[key]
