@@ -104,9 +104,10 @@ class GenomeStorageNew():
         self.next_available_id = {}
 
         if create_new:
-            self.touch()
-
-        self.init()
+            self.create_tables()
+            self.set_meta_values()
+        else:
+            self.init()
 
     def check_storage_path_for_create_new(self):
         if not self.db_path.endswith('GENOMES.db'):
@@ -237,7 +238,7 @@ class GenomeStorageNew():
             self.db.commit()
 
 
-    def touch(self):
+    def create_tables(self):
         self.db.create_table(t.genome_info_table_name, t.genome_info_table_structure, t.genome_info_table_types)
 
         for table_id, attributes in self.tables.items():
@@ -256,6 +257,8 @@ class GenomeStorageNew():
                 self.db._exec("CREATE INDEX %s_primary_and_genome_index ON %s (%s, genome_name);" % 
                                (table_name, table_name, attributes.primary_key))
 
+
+    def set_meta_values(self):
         self.db.set_meta_value('hash', 'hash_EMPTY_DATABASE')
         self.db.set_meta_value('type', self.db_type)
 
