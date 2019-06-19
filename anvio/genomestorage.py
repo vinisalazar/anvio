@@ -48,61 +48,53 @@ class GenomeStorageNew():
 
         self.db = db.DB(self.db_path, self.version, new_database=create_new)
 
-        Attributes = collections.namedtuple('Attributes', 'primary_key has_numeric_key filter \
-                                                           filter_source append_genome')
+        Attributes = collections.namedtuple('Attributes', 'primary_key has_numeric_key filter filter_source')
 
         # IMPORTANT: keys of this dictionary are not same as table names. as tables/__init__.py 
         # contains inconsistencies between variable names and table names, keys here follows variable names.
         # and will be referred as table_id inside this class.  
         self.tables = collections.OrderedDict({
                 'contig_sequences': Attributes(primary_key='contig', has_numeric_key=False, 
-                                                filter='contig', filter_source='contig', append_genome=True),
+                                                filter='contig', filter_source='contig'),
 
                 'contigs_info':     Attributes(primary_key='contig', has_numeric_key=False,
-                                                filter='contig', filter_source='contig', append_genome=True),
+                                                filter='contig', filter_source='contig'),
 
                 'splits_info':      Attributes(primary_key='split', has_numeric_key=False, 
-                                                filter='split', filter_source='split', append_genome=True),
+                                                filter='split', filter_source='split'),
 
                 'genes_in_contigs': Attributes(primary_key='gene_callers_id', has_numeric_key=False, 
-                                                filter='gene_callers_id', filter_source='gene_callers_id',
-                                                append_genome=True),
+                                                filter='gene_callers_id', filter_source='gene_callers_id'),
 
                 'genes_in_splits':  Attributes(primary_key='entry_id', has_numeric_key=True,
-                                                filter='gene_callers_id', filter_source='gene_callers_id',
-                                                append_genome=True),
+                                                filter='gene_callers_id', filter_source='gene_callers_id'),
 
                 'gene_amino_acid_sequences':  Attributes(primary_key='gene_callers_id', has_numeric_key=False,
-                                                        filter='gene_callers_id', filter_source='gene_callers_id',
-                                                        append_genome=True),
+                                                        filter='gene_callers_id', filter_source='gene_callers_id'),
 
                 'gene_function_calls':  Attributes(primary_key='entry_id', has_numeric_key=True,
-                                                    filter='gene_callers_id', filter_source='gene_callers_id',
-                                                    append_genome=True),
+                                                    filter='gene_callers_id', filter_source='gene_callers_id'),
 
                 'hmm_hits_info':  Attributes(primary_key='source', has_numeric_key=False, filter=None, 
-                                                filter_source=None, append_genome=False),
+                                                filter_source=None),
 
                 'hmm_hits':  Attributes(primary_key='entry_id', has_numeric_key=True, 
-                                        filter='gene_callers_id', filter_source='gene_callers_id', append_genome=True),
+                                        filter='gene_callers_id', filter_source='gene_callers_id'),
 
                 'hmm_hits_splits': Attributes(primary_key='entry_id', has_numeric_key=True, 
-                                        filter='split', filter_source='split', append_genome=True),
+                                            filter='split', filter_source='split'),
 
                 'nt_position_info': Attributes(primary_key='contig_name', has_numeric_key=False, 
-                                        filter='contig_name', filter_source='contig', append_genome=True),
-
-                # 'gene_level_coverage_stats': Attributes(primary_key='entry_id', has_numeric_key=True, 
-                #                         filter='gene_callers_id', filter_source='gene_callers_id', append_genome=True),
+                                            filter='contig_name', filter_source='contig'),
 
                 'splits_taxonomy': Attributes(primary_key='split', has_numeric_key=False, filter='split', 
-                                            filter_source='split', append_genome=True),
+                                            filter_source='split'),
 
-                'genes_taxonomy': Attributes(primary_key='gene_callers_id', has_numeric_key=False, filter='gene_callers_id', 
-                                                filter_source='gene_callers_id', append_genome=True),
+                'genes_taxonomy': Attributes(primary_key='gene_callers_id', has_numeric_key=False, 
+                                            filter='gene_callers_id', filter_source='gene_callers_id'),
 
                 'taxon_names': Attributes(primary_key='taxon_id', has_numeric_key=False, filter=None, 
-                                            filter_source=None, append_genome=True),
+                                            filter_source=None),
             })
 
         self.next_available_id = {}
@@ -217,8 +209,8 @@ class GenomeStorageNew():
 
                 self.next_available_id[table_id] += 1
 
-            if attributes.append_genome:
-                entry.append(genome['name'])
+            # add value for genome_name column
+            entry.append(genome['name'])
 
             entries.append(tuple(entry))
 
@@ -233,9 +225,8 @@ class GenomeStorageNew():
         for table_id, attributes in self.tables.items():
             table_name, table_structure, table_types = self.get_table_defs(table_id)
 
-            if attributes.append_genome:
-                table_structure += ['genome_name']
-                table_types     += [   'text'    ]
+            table_structure += ['genome_name']
+            table_types     += [   'text'    ]
 
             self.db.create_table(table_name, table_structure, table_types)
 
@@ -244,7 +235,6 @@ class GenomeStorageNew():
                 self.db._exec("CREATE INDEX %s_primary_index ON %s (%s);" % 
                                (table_name, table_name, attributes.primary_key))
 
-            if attributes.primary_key and attributes.append_genome:
                 self.db._exec("CREATE INDEX %s_primary_and_genome_index ON %s (%s, genome_name);" % 
                                (table_name, table_name, attributes.primary_key))
 
