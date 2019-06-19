@@ -150,6 +150,20 @@ class GenomeStorageNew():
         for table_id, attributes in self.tables.items():
             self.import_table(source_db, table_id, attributes, genome)
 
+        # add genome information to genome_info table
+        values = (genome['name'], )
+
+        for column_name in t.genome_info_table_structure[1:]:
+            if genome[column_name]:
+                values += (genome[column_name], )
+            else:
+                # the following line will add a -1 for any `key` that has the value of `None`. the reason
+                # we added this was to be able to work with contigs databases without any hmm hits for SCGs
+                # which is covered in https://github.com/merenlab/anvio/issues/573
+                values += (-1, )
+
+        self.db.insert(t.genome_info_table_name, values=values)
+
 
     def import_table(self, source_db, table_id, attributes, genome):
         table_name, table_structure, table_types = self.get_table_defs(table_id)
@@ -202,6 +216,9 @@ class GenomeStorageNew():
 
 
     def touch(self):
+
+        self.db.create_table(t.genome_info_table_name, t.genome_info_table_structure, t.genome_info_table_types)
+
         for table_id, attributes in self.tables.items():
             table_name, table_structure, table_types = self.get_table_defs(table_id)
 
