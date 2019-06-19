@@ -144,7 +144,17 @@ class GenomeStorageNew():
             self.add_genome(genome_desc)
 
 
+
+
     def add_genome(self, genome):
+        genomes_in_db = self.db.get_single_column_from_table(t.genome_info_table_name, 'genome_name')
+        
+        if genome['name'] in genomes_in_db:
+            raise ConfigError("It seems the genome '%s' you are trying to add, already exists \
+                               in the genome storage. If you see this message while creating \
+                               a genome storage with multiple internal or external genomes make sure\
+                               that you don't have duplicate entries." % genome['name'])
+        
         source_db = db.DB(genome['contigs_db_path'], anvio.__contigs__version__)
 
         for table_id, attributes in self.tables.items():
