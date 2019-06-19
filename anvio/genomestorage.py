@@ -38,10 +38,14 @@ pp = terminal.pretty_print
 
 
 class GenomeStorageNew():
-    def __init__(self, db_path, create_new=False):
+    def __init__(self, db_path, create_new=False, genome_names_to_focus=None):
         self.db_path = db_path
         self.db_type = 'genomestorage'
         self.version = anvio.__genomes_storage_version__
+        self.genome_names_to_focus = genome_names_to_focus
+
+        # will be populated by init()
+        self.genome_names = None
 
         if create_new:
             self.check_storage_path_for_create_new()
@@ -122,6 +126,24 @@ class GenomeStorageNew():
                 self.next_available_id[table_id] = self.db.get_max_value_in_column(name, 
                     attributes.primary_key, value_if_empty=-1) + 1
 
+        genome_names_in_db = self.get_all_genome_names()
+
+        if self.genome_names_to_focus:
+            genome_names_to_focus_missing_from_db = [g for g in self.genome_names_to_focus if g not in genome_names_in_db]
+
+            # make sure the user knows what they're doing
+            if genome_names_to_focus_missing_from_db:
+                raise ConfigError("%d of %d genome names you wanted to focus are missing from the genomes sotrage.\
+                                 Although this may not be a show-stopper, anvi'o likes to be explicit, so here we\
+                                 are. Not going anywhere until you fix this. For instance this is one of the missing\
+                                 genome names: '%s', and this is one random genome name from the database: '%s'" % \
+                                         (len(genome_names_to_focus_missing_from_db), len(self.genome_names_to_focus),\
+                                         genome_names_to_focus_missing_from_db[0], ', '.join(genome_names_in_db)))
+
+            self.genome_names = self.genome_names_to_focus
+        else:
+            self.genome_names = genome_names_in_db
+
 
     def get_table_defs(self, table_id):
         table_name      =   getattr(t, "%s_table_name"      % table_id)
@@ -136,12 +158,8 @@ class GenomeStorageNew():
             self.add_genome(genome_desc)
 
 
-
-
-    def add_genome(self, genome):
-        genomes_in_db = self.db.get_single_column_from_table(t.genome_info_table_name, 'genome_name')
-        
-        if genome['name'] in genomes_in_db:
+    def add_genome(self, genome):        
+        if genome['name'] in self.get_all_genome_names():
             raise ConfigError("It seems the genome '%s' you are trying to add, already exists \
                                in the genome storage. If you see this message while creating \
                                a genome storage with multiple internal or external genomes make sure\
@@ -242,6 +260,24 @@ class GenomeStorageNew():
         self.db.set_meta_value('type', self.db_type)
 
 
+    def get_all_genome_names(self):
+        return self.db.get_single_column_from_table(t.genome_info_table_name, 'genome_name')
+
+
+    def get_genomes_dict(self):
+        # we retrieve all table at once to avoid seperate sql queries
+        all_genomes_dict = self.db.get_table_as_dict(t.genome_info_table_name)
+        result = {}
+
+        # copy genomes requested by user to result dictionary
+        for genome_name in self.genome_names:
+            result[genome_name] = all_genomes_dict[genome_name]
+
+        return result
+
+
+
+
     def update_storage_hash(self):
         # here we create a signature for the storage itself by concatenating all hash values from all genomes. even if one
         # split is added or removed to any of these genomes will change this signature. since we will tie this information
@@ -252,6 +288,10 @@ class GenomeStorageNew():
         new_hash = 'hash' + str(hashlib.sha224(concatenated_genome_hashes.encode('utf-8')).hexdigest()[0:8])
 
         self.db.set_meta_value('hash', new_hash)
+
+
+    def close(self):
+        self.db.disconnect()
 
 
 class GenomeStorage(object):
