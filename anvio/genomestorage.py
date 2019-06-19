@@ -109,6 +109,9 @@ class GenomeStorageNew():
         else:
             self.init()
 
+        self.populate_next_available_ids()
+
+
     def check_storage_path_for_create_new(self):
         if not self.db_path.endswith('GENOMES.db'):
             raise ConfigError("The genomes storage file must end with '-GENOMES.db'. Anvi'o developers do know how ridiculous\
@@ -118,8 +121,7 @@ class GenomeStorageNew():
         filesnpaths.is_output_file_writable(self.db_path)
 
 
-
-    def init(self):
+    def populate_next_available_ids(self):
         for table_id, attributes in self.tables.items():
             if attributes.has_numeric_key:
                 name, structure, types = self.get_table_defs(table_id)
@@ -127,6 +129,7 @@ class GenomeStorageNew():
                 self.next_available_id[table_id] = self.db.get_max_value_in_column(name, 
                     attributes.primary_key, value_if_empty=-1) + 1
 
+    def init(self):
         genome_names_in_db = self.get_all_genome_names()
 
         if self.genome_names_to_focus:
