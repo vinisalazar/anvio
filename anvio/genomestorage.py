@@ -393,6 +393,19 @@ class GenomeStorage():
         return self.gene_info[genome_name][gene_caller_id][column_name]
 
 
+    def get_gene_functions(self, genome_name, gene_callers_id):
+        if not self.functions_are_available:
+            raise ConfigError("Functions are not available in this genome storage ('%s'). " % self.storage_path)
+
+        if self.skip_init_functions:
+            raise ConfigError("Functions are not initialized for this genome storage ('%s'). " % self.storage_path)
+
+        self.is_known_genome(genome_name)
+        self.is_known_gene_call(genome_name, gene_callers_id)
+
+        return self.gene_info[genome_name][gene_callers_id]['functions']
+
+
     def gen_combined_aa_sequences_FASTA(self, output_file_path, exclude_partial_gene_calls=False):
         self.run.info('Exclude partial gene calls', exclude_partial_gene_calls, nl_after=1)
 

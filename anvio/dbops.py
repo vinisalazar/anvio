@@ -1430,7 +1430,7 @@ class PanSuperclass(object):
                 for genome_id in self.gene_clusters_functions_dict[gene_cluster_id]:
                     for gene_callers_id in self.gene_clusters_functions_dict[gene_cluster_id][genome_id]:
                         if annotation_source in self.gene_clusters_functions_dict[gene_cluster_id][genome_id][gene_callers_id]:
-                            hits[self.gene_clusters_functions_dict[gene_cluster_id][genome_id][gene_callers_id][annotation_source][0]] += 1
+                            hits[self.gene_clusters_functions_dict[gene_cluster_id][genome_id][gene_callers_id][annotation_source]['accession']] += 1
                         else:
                             hits['UNKNOWN'] += 1
 
