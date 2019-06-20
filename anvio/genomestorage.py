@@ -38,11 +38,14 @@ pp = terminal.pretty_print
 
 
 class GenomeStorageNew():
-    def __init__(self, db_path, create_new=False, genome_names_to_focus=None):
+    def __init__(self, db_path, create_new=False, genome_names_to_focus=None, skip_init_functions=False, progress=progress, run=run):
         self.db_path = db_path
         self.db_type = 'genomestorage'
         self.version = anvio.__genomes_storage_version__
         self.genome_names_to_focus = genome_names_to_focus
+
+        self.progress = progress
+        self.run = run
 
         # will be populated by init()
         self.genome_names = None
@@ -147,6 +150,38 @@ class GenomeStorageNew():
             self.genome_names = self.genome_names_to_focus
         else:
             self.genome_names = genome_names_in_db
+
+        ## load the data
+        self.progress.new('Recovering data from the db')
+        self.progress.update('Loading genomes basic info...')
+        where_clause = """genome_name IN (%s)""" % ",".join('"' + item + '"' for item in self.genome_names)
+        self.genomes_info = self.db.get_some_rows_from_table_as_dict(t.genome_info_table_name, where_clause)
+
+        self.gene_info = {}
+        self.progress.update('Loading genes info for %s genomes...' % len(self.genomes_info))
+        
+        gene_aa_sequences_table_name, _, _ = self.get_table_defs('gene_amino_acid_sequences')
+        gene_table_name, _, _ = self.get_table_defs('genes_in_contigs')
+
+        gene_aa_sequences = self.db.get_some_rows_from_table_as_dict(gene_aa_sequences_table_name, where_clause)
+
+        if not self.skip_init_functions
+
+        for gene_info_tuple in self.db.get_some_rows_from_table(gene_table_name, where_clause):
+            gene_callers_id, contig, start, stop, direction, partial, version, source, genome_name = gene_info_tuple
+            length = stop - start
+            
+            if genome_name not in self.gene_info:
+                self.gene_info[genome_name] = {}
+
+            self.gene_info[genome_name][gene_callers_id] = {
+                'aa_sequence': gene_aa_sequences[gene_callers_id],
+                'partial': partial,
+                'length': length,
+                'functions': {}
+            }
+
+        self.progress.end()
 
 
     def get_table_defs(self, table_id):
