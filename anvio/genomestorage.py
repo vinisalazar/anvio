@@ -38,7 +38,7 @@ pp = terminal.pretty_print
 
 
 class GenomeStorage():
-    def __init__(self, db_path, create_new=False, genome_names_to_focus=None, skip_init_functions=False, progress=progress, run=run):
+    def __init__(self, db_path, storage_hash=None, create_new=False, genome_names_to_focus=None, skip_init_functions=False, progress=progress, run=run):
         self.db_path = db_path
         self.db_type = 'genomestorage'
         self.version = anvio.__genomes_storage_version__
@@ -332,7 +332,8 @@ class GenomeStorage():
 
         return result
 
-
+    def get_storage_hash(self):
+        return self.db.get_meta_value('hash')
 
 
     def update_storage_hash(self):
@@ -347,5 +348,85 @@ class GenomeStorage():
         self.db.set_meta_value('hash', new_hash)
 
 
+    def is_known_genome(self, genome_name, throw_exception=True):
+        if genome_name not in self.genomes_info:
+            if throw_exception:
+                raise ConfigError('The database at "%s" does not know anything about "%s" :(' % (self.storage_path, genome_name))
+            else:
+                return False
+        else:
+            return True
+
+
+    def is_known_gene_call(self, genome_name, gene_caller_id):
+        if genome_name not in self.gene_info and gene_caller_id not in self.gene_info[genome_name]:
+            raise ConfigError('The database at "%s" does not know anything gene caller id "%d" in genome "%s" :(' % (self.storage_path, gene_caller_id, genome_name))
+
+
+    def is_partial_gene_call(self, genome_name, gene_caller_id):
+        self.is_known_genome(genome_name)
+        self.is_known_gene_call(genome_name, gene_caller_id)
+
+        return (self.gene_info[genome_name][gene_caller_id]['partial'] == 1)
+
+
+    def get_gene_caller_ids(self, genome_name):
+        self.is_known_genome(genome_name)
+        return self.gene_info[genome_name].keys()
+
+
+    def get_gene_sequence(self, genome_name, gene_caller_id, report_DNA_sequences=False):
+        """Returns gene amino acid sequence unless `report_DNA_sequences` is True."""
+        self.is_known_genome(genome_name)
+        self.is_known_gene_call(genome_name, gene_caller_id)
+
+        column_name = 'dna_sequence' if report_DNA_sequences else 'aa_sequence' 
+
+        return self.gene_info[genome_name][gene_caller_id][column_name]
+
+
+    def gen_combined_aa_sequences_FASTA(self, output_file_path, exclude_partial_gene_calls=False):
+        self.run.info('Exclude partial gene calls', exclude_partial_gene_calls, nl_after=1)
+
+        total_num_aa_sequences = 0
+        total_num_excluded_aa_sequences = 0
+
+        fasta_output = fastalib.FastaOutput(output_file_path)
+
+        genome_info_dict = self.get_genomes_dict()
+
+        for genome_name in self.genome_names:
+            self.progress.new('Storing aa sequences')
+            self.progress.update('%s ...' % genome_name)
+
+            gene_caller_ids = sorted([int(gene_caller_id) for gene_caller_id in self.get_gene_caller_ids(genome_name)])
+
+            for gene_caller_id in gene_caller_ids:
+                is_partial = self.is_partial_gene_call(genome_name, gene_caller_id)
+
+                if exclude_partial_gene_calls and is_partial:
+                    total_num_excluded_aa_sequences += 1
+                    continue
+
+                aa_sequence = self.get_gene_sequence(genome_name, gene_caller_id)
+
+                fasta_output.write_id('%s_%d' % (genome_info_dict[genome_name]['genome_hash'], int(gene_caller_id)))
+                fasta_output.write_seq(aa_sequence, split=False)
+
+                total_num_aa_sequences += 1
+
+            self.progress.end()
+
+        fasta_output.close()
+
+        self.run.info('AA sequences FASTA', output_file_path)
+        self.run.info('Num AA sequences reported', '%s' % pp(total_num_aa_sequences), nl_before=1)
+        self.run.info('Num excluded gene calls', '%s' % pp(total_num_excluded_aa_sequences))
+
+        return total_num_aa_sequences, total_num_excluded_aa_sequences
+
+
+
     def close(self):
         self.db.disconnect()
+
