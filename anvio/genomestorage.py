@@ -167,8 +167,6 @@ class GenomeStorageNew():
 
         gene_aa_sequences = self.db.get_some_rows_from_table_as_dict(gene_aa_sequences_table_name, where_clause)
 
-        if not self.skip_init_functions
-
         for gene_info_tuple in self.db.get_some_rows_from_table(gene_table_name, where_clause):
             gene_callers_id, contig, start, stop, direction, partial, version, source, genome_name = gene_info_tuple
             length = stop - start
@@ -316,7 +314,7 @@ class GenomeStorageNew():
 
     def set_meta_values(self):
         self.db.set_meta_value('hash', 'hash_EMPTY_DATABASE')
-        self.db.set_meta_value('type', self.db_type)
+        self.db.set_meta_value('db_type', self.db_type)
 
 
     def get_all_genome_names(self):
