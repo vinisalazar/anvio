@@ -43,6 +43,7 @@ class GenomeStorageNew():
         self.db_type = 'genomestorage'
         self.version = anvio.__genomes_storage_version__
         self.genome_names_to_focus = genome_names_to_focus
+        self.skip_init_functions = skip_init_functions
 
         self.progress = progress
         self.run = run
@@ -162,6 +163,7 @@ class GenomeStorageNew():
         
         gene_aa_sequences_table_name, _, _ = self.get_table_defs('gene_amino_acid_sequences')
         gene_table_name, _, _ = self.get_table_defs('genes_in_contigs')
+        gene_functions_table_name, _, _ = self.get_table_defs('gene_function_calls')
 
         gene_aa_sequences = self.db.get_some_rows_from_table_as_dict(gene_aa_sequences_table_name, where_clause)
 
@@ -181,6 +183,22 @@ class GenomeStorageNew():
                 'functions': {}
             }
 
+
+        if not self.skip_init_functions:
+            for gene_function_tuple in self.db.get_some_rows_from_table(gene_functions_table_name, where_clause):
+                entry_id, gene_callers_id, source, accession, function, e_value, genome_name = gene_function_tuple
+                
+                if gene_callers_id not in self.gene_info[genome_name]:
+                    continue
+
+                function_dict = {
+                    'accession': accession,
+                    'function': function,
+                    'e_value': e_value
+                }
+
+                self.gene_info[genome_name][gene_callers_id]['functions'][source] = function_dict
+
         self.progress.end()
 
 
@@ -197,7 +215,7 @@ class GenomeStorageNew():
             self.add_genome(genome_desc)
 
 
-    def add_genome(self, genome):        
+    def add_genome(self, genome):
         if genome['name'] in self.get_all_genome_names():
             raise ConfigError("It seems the genome '%s' you are trying to add, already exists \
                                in the genome storage. If you see this message while creating \
