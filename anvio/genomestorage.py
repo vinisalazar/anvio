@@ -134,6 +134,8 @@ class GenomeStorage():
                     attributes.primary_key, value_if_empty=-1) + 1
 
     def init(self):
+        self.functions_are_available = self.db.get_meta_value('functions_are_available')
+
         genome_names_in_db = self.get_all_genome_names()
 
         if self.genome_names_to_focus:
@@ -175,7 +177,7 @@ class GenomeStorage():
                 self.gene_info[genome_name] = {}
 
             self.gene_info[genome_name][gene_callers_id] = {
-                'aa_sequence': gene_aa_sequences[gene_callers_id],
+                'aa_sequence': gene_aa_sequences[gene_callers_id]['sequence'],
                 'partial': partial,
                 'length': length,
                 'functions': {}
@@ -209,6 +211,10 @@ class GenomeStorage():
 
 
     def store_genomes(self, description):
+        self.functions_are_available = description.functions_are_available
+        self.db.set_meta_value('functions_are_available', self.functions_are_available)
+        self.db.set_meta_value('gene_function_sources', ','.join(description.function_annotation_sources))
+
         for name, genome_desc in description.genomes.items():
             self.add_genome(genome_desc)
 
@@ -315,6 +321,8 @@ class GenomeStorage():
     def set_meta_values(self):
         self.db.set_meta_value('hash', 'hash_EMPTY_DATABASE')
         self.db.set_meta_value('db_type', self.db_type)
+        self.db.set_meta_value('creation_date', time.time())
+        self.db.set_meta_value('functions_are_available', False)
 
 
     def get_all_genome_names(self):
