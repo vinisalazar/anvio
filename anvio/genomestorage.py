@@ -249,7 +249,7 @@ class GenomeStorageNew():
             else:
                 keys = map(str, filters[attributes.filter_source])
 
-            where_clause = '%s IN (%s)' % (attributes.primary_key,
+            where_clause = '%s IN (%s)' % (attributes.filter,
                                            ",".join(keys))
 
         table_content = source_db.get_some_rows_from_table(table_name, where_clause=where_clause)
