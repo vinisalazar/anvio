@@ -116,6 +116,11 @@ class GenomeStorage():
         self.populate_next_available_ids()
 
 
+    @property
+    def num_genomes(self):
+        return len(self.genome_names)
+
+
     def check_storage_path_for_create_new(self):
         if not self.db_path.endswith('GENOMES.db'):
             raise ConfigError("The genomes storage file must end with '-GENOMES.db'. Anvi'o developers do know how ridiculous\
