@@ -1346,7 +1346,8 @@ class PanSuperclass(object):
                 for gene_caller_id in self.gene_clusters_functions_dict[gene_cluster][genome]:
                     if functional_annotation_source in self.gene_clusters_functions_dict[gene_cluster][genome][gene_caller_id]:
                         annotation_blob = self.gene_clusters_functions_dict[gene_cluster][genome][gene_caller_id][functional_annotation_source]
-                        accessions, annotations = [l.split('!!!') for l in annotation_blob.split("|||")]
+                        accessions, annotations = [l.split('!!!') for l in [annotation_blob['accession'], annotation_blob['function'] ]]
+
                         for a,f in zip(accessions, annotations):
                             if f not in gene_clusters_functions_summary_dict[gene_cluster]:
                                 gene_clusters_functions_summary_dict[gene_cluster][f] = 0

@@ -164,13 +164,11 @@ function get_gene_functions_table_html_for_pan(gene_callers_id, genome_name){
     functions_table_html += '<tbody>';
 
     for (function_source in gene.functions){
-        gene.functions[function_source] = gene.functions[function_source].split('|||');
         functions_table_html += '<tr>';
-
         functions_table_html += '<td><b>' + function_source + '</b></td>';
         if (gene.functions[function_source]) {
-            functions_table_html += '<td>' + decorateAccession(function_source, gene.functions[function_source][0]) + '</td>';
-            functions_table_html += '<td><em>' + decorateAnnotation(function_source, gene.functions[function_source][1]) + '</em></td>';
+            functions_table_html += '<td>' + decorateAccession(function_source, gene.functions[function_source]['accession']) + '</td>';
+            functions_table_html += '<td><em>' + decorateAnnotation(function_source, gene.functions[function_source]['function']) + '</em></td>';
         } else {
             functions_table_html += '<td>&nbsp;</td>';
             functions_table_html += '<td>&nbsp;</td>';
