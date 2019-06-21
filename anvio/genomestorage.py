@@ -14,6 +14,7 @@ import collections
 
 import anvio
 import anvio.db as db
+import anvio.utils as utils
 import anvio.tables as t
 import anvio.fastalib as fastalib
 import anvio.terminal as terminal
@@ -182,6 +183,10 @@ class GenomeStorage():
                 self.gene_info[genome_name] = {}
 
             self.gene_info[genome_name][gene_callers_id] = {
+                'contig': contig,
+                'start': start,
+                'stop': stop,
+                'direction': direction,
                 'aa_sequence': gene_aa_sequences[gene_callers_id]['sequence'],
                 'partial': partial,
                 'length': length,
@@ -388,14 +393,33 @@ class GenomeStorage():
         return self.gene_info[genome_name].keys()
 
 
-    def get_gene_sequence(self, genome_name, gene_caller_id, report_DNA_sequences=False):
+    def get_gene_sequence(self, genome_name, gene_callers_id, report_DNA_sequences=False):
         """Returns gene amino acid sequence unless `report_DNA_sequences` is True."""
         self.is_known_genome(genome_name)
-        self.is_known_gene_call(genome_name, gene_caller_id)
+        self.is_known_gene_call(genome_name, gene_callers_id)
+
+        gene_call = self.gene_info[genome_name][gene_callers_id]
+
+        if report_DNA_sequences and 'dna_sequence' not in gene_call:
+            contig_name = gene_call['contig']
+            start, stop = gene_call['start'], gene_call['stop']
+            direction = gene_call['direction']
+
+            contig_sequences_table_name, _, _ = self.get_table_defs('contig_sequences')
+
+            where = 'contig LIKE "%s" AND genome_name LIKE "%s"' % (contig_name, genome_name)
+            contig_sequence = self.db.get_some_rows_from_table(contig_sequences_table_name, where)[0][1]
+
+            sequence = contig_sequence[start:stop]
+
+            if direction == 'r':
+                sequence = utils.rev_comp(sequence)
+
+            gene_call['dna_sequence'] = sequence
 
         column_name = 'dna_sequence' if report_DNA_sequences else 'aa_sequence' 
 
-        return self.gene_info[genome_name][gene_caller_id][column_name]
+        return gene_call[column_name]
 
 
     def get_gene_functions(self, genome_name, gene_callers_id):
