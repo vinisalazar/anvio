@@ -3,7 +3,7 @@
 ## A script to read in functional annotation data and perform the
 ## functional enrichment analysis
 
-## Amy Willis, September 2019
+## Amy Willis, March 2020
 
 ## Usage:
 #         anvi-get-enriched-functions-per-pan-group --input input.txt --output output.txt
@@ -124,7 +124,7 @@ get_unadjusted_p_value <- function(anova_output) {
 # fit the GLMs in a nifty way using nest()
 w_models <- df_in %>%
   gather(key = "type", value = "value", -c(1:n_columns_before_data)) %>%
-  separate(type, into = c("type", "group"), sep = "_") %>%
+  separate(type, into = c("type", "group"), sep = "_", extra = "merge") %>%
   spread(type, value) %>%
   mutate(x = N * p) %>%
   select(-p) %>%
@@ -132,13 +132,20 @@ w_models <- df_in %>%
   nest %>%
   mutate(model = map(data, run_test_no_spread))
 
-# get the p-values, enrichment_scores, q-values;
-# then format the data and save
-enrichment_output <- w_models %>%
+# get the p-values & enrichment_scores
+pvalues_df <- w_models %>%
   transmute(function_accession,
             "unadjusted_p_value" = map_dbl(model, get_unadjusted_p_value),
-            "enrichment_score" = map_dbl(model, get_enrichment_score)) %>%
-  mutate("adjusted_q_value" = qvalue::qvalue(unadjusted_p_value)$qvalues) %>%
+            "enrichment_score" = map_dbl(model, get_enrichment_score))
+
+# find the maximum lambda for qvalue
+# reasons for this change documented at https://github.com/merenlab/anvio/issues/1383
+max_lambda <- min(0.95, max(pvalues_df$unadjusted_p_value, na.rm=T))
+
+# get the q-values, then format the data and save
+enrichment_output <- pvalues_df %>%
+  mutate("adjusted_q_value" = qvalue::qvalue(unadjusted_p_value,
+                                             lambda = seq(0.05, max_lambda, 0.05))$qvalues) %>%
   left_join(df_in, by = "function_accession") %>%
   select(names(df_in)[1],  # e.g. COG_FUNCTION
          enrichment_score,
@@ -147,7 +154,28 @@ enrichment_output <- w_models %>%
          associated_groups,
          function_accession,
          gene_clusters_ids,
-         names(df_in)[n_columns_before_data + (1 : (G * 2))]) %>%
+         names(df_in)[n_columns_before_data + (1 : (G * 2))])
+
+# Rao test statistic should always be positive. However,
+# it happens that Rao test statistics are numerically negative
+# but close to zero. If they are large and negative (say, smaller than
+# 0.00001), we should throw an error:
+if (min(enrichment_output$enrichment_score) < -1e-5) {
+  message("A Rao test statistic is large and negative, oh my!")
+  message("Here are the rows where the test statistic was negative:")
+
+  enrichment_output %>%
+    filter(enrichment_score < 0) %>%
+    arrange(desc(enrichment_score)) %>%
+    print(n = Inf)
+
+  stop("Something has gone terribly wrong, and it's Amy's fault. Please let her know ASAP so she can fix it!")
+}
+
+# If they are small and negative, just set them to zero. Then,
+# order the columns from largest to smallest enrichment score:
+enrichment_output %<>%
+  mutate("enrichment_score" = pmax(0, enrichment_score)) %>%
   arrange(desc(enrichment_score))
 
 enrichment_output %>%

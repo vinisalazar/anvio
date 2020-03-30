@@ -60,11 +60,11 @@ class TableForSCGTaxonomy(Table):
         self.database.disconnect()
 
 
-    def update_self_value(self):
+    def update_self_value(self, value=True):
         """Updates the self table in contigs db to clarify that scg taxonomy were run"""
 
         self.database = db.DB(self.db_path, utils.get_required_version_for_db(self.db_path))
-        self.database.update_meta_value("scg_taxonomy_was_run", True)
+        self.database.update_meta_value("scg_taxonomy_was_run", value)
         self.database.disconnect()
 
 
@@ -87,8 +87,8 @@ class TableForSCGTaxonomy(Table):
         dictonnary_taxonomy_by_index=self.database.get_table_as_dict(t.scg_taxonomy_table_name)
         self.database.disconnect()
         if not len(dictonnary_taxonomy_by_index):
-            raise ConfigError("Your contigs database does not seem to contain any information anvi'o can use to\
-                               estimate taxonomy of anything. Please try running the program 'anvi-run-scg-taxonomy'\
-                               first.")
+            raise ConfigError("Your contigs database does not seem to contain any information anvi'o can use to "
+                              "estimate taxonomy of anything. Please try running the program 'anvi-run-scg-taxonomy' "
+                              "first.")
         else:
             return(dictonnary_taxonomy_by_index)
